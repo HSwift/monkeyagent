@@ -18,6 +18,10 @@ function readManifest() {
   const data = yaml.load(MV3 ? input.replaceAll('browser_action', 'action') : input);
   if (MV3) Object.assign(data, {
     manifest_version: 3,
+    devtools_page: 'agent/devtools.html',
+    content_security_policy: {
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    },
     minimum_chrome_version: '135.0', // chrome.userScripts.execute
     background: { service_worker: 'sw.js' },
     browser_specific_settings: undefined,
@@ -28,6 +32,7 @@ function readManifest() {
     host_permissions: ['<all_urls>'],
     permissions: data.permissions.filter(p => p !== '<all_urls>' && p !== 'webRequestBlocking').concat([
       'alarms',
+      'debugger',
       'declarativeNetRequestWithHostAccess',
       !isProd && 'declarativeNetRequestFeedback',
       'identity',

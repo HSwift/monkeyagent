@@ -34,6 +34,23 @@ async function jsDev() {
   return runCommand('webpack-cli', ['-w', '--config', 'scripts/webpack.conf.js']);
 }
 
+async function agentBuild() {
+  if (MV3) await runCommand('pnpm', ['--filter', '@monkeyagent/devtools-agent', 'build']);
+}
+
+async function agentCopy() {
+  if (MV3) await fs.cp('packages/devtools-agent/dist', `${DIST}/agent`, {
+    recursive: true,
+    filter: path => !/[/\\]fixture\.js(?:\.map)?$/.test(path),
+  });
+}
+
+async function agentWatch() {
+  if (!MV3) return;
+  gulp.watch('packages/devtools-agent/dist/**/*', agentCopy);
+  await runCommand('pnpm', ['--filter', '@monkeyagent/devtools-agent', 'watch']);
+}
+
 async function jsProd() {
   return runCommand('webpack-cli', ['--config', 'scripts/webpack.conf.js']);
 }
@@ -166,8 +183,8 @@ const pack = gulp.parallel(createIcons, copyI18n, ...MV3 ? [manifest] : []);
 
 exports.clean = clean;
 exports.manifest = manifest;
-exports.dev = gulp.parallel(gulp.series(pack, watch), jsDev);
-exports.build = gulp.series(clean, gulp.parallel(pack, jsProd));
+exports.dev = gulp.series(agentBuild, agentCopy, gulp.parallel(gulp.series(pack, watch), jsDev, agentWatch));
+exports.build = gulp.series(clean, gulp.parallel(pack, jsProd, gulp.series(agentBuild, agentCopy)));
 exports.i18n = updateI18n;
 exports.check = checkI18n;
 exports.copyI18n = copyI18n;

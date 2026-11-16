@@ -1,0 +1,703 @@
+import {
+  ToolLoopAgent,
+  isStepCount,
+  convertToModelMessages,
+  readUIMessageStream,
+  InvalidToolInputError,
+  NoSuchToolError,
+  type UIMessage,
+  type UIMessageChunk,
+} from 'ai';
+import { BrowserSession } from '../browser/session';
+import { ReplClient } from '../repl/client';
+import { validateHostCall } from '../repl/contracts';
+import { ScriptService, installedSummary } from '../scripts/service';
+import { openAgentDB, type AgentDB } from '../workspace/database';
+import { WorkspaceService, fileSummary } from '../workspace/service';
+import { acquireWorkspaceLease } from '../workspace/lease';
+import { createModel, loadSettings, saveSettings, checkConnection } from '../model/settings';
+import { ACTIVE_TOOLS, createTools, findArtifacts } from '../agent/tools';
+import { FileTools } from '../agent/file-tools';
+import { INSTRUCTIONS } from '../agent/prompt';
+import { normalizeMessageIds, toolInputHint } from '../agent/messages';
+import { AgentError, SerialQueue, errorData, sleep } from '../protocol/errors';
+import type {
+  ModelSettings,
+  OperationRecord,
+  PortEvent,
+  PortRequest,
+  RunRecord,
+  ScriptStoreAdapter,
+  Snapshot,
+  ToolResult,
+} from '../protocol/types';
+
+const ACTIVE = new Set(['generating', 'executing', 'stopping']);
+export class Controller {
+  private db!: AgentDB;
+  workspace!: WorkspaceService;
+  browser!: BrowserSession;
+  private scripts!: ScriptService;
+  private fileTools!: FileTools;
+  private repl!: ReplClient;
+  private queue = new SerialQueue();
+  private messages: UIMessage[] = [];
+  private conversationId!: string;
+  private clearing?: Promise<Snapshot>;
+  private run?: RunRecord;
+  private abort?: AbortController;
+  private toolsAbort = new AbortController();
+  private operationSignal?: AbortSignal;
+  private activeStream?: string;
+  private chunks: UIMessageChunk[] = [];
+  private ports = new Set<MessagePort>();
+  private timer?: ReturnType<typeof setTimeout>;
+  private streamTask?: Promise<void>;
+  private error?: string;
+  private releaseWorkspace?: () => void;
+  private consumed: UIMessage[] = [];
+  constructor(
+    public tabId: number,
+    private adapter: ScriptStoreAdapter,
+    private targetUrl = '',
+    private beforeAttach: () => Promise<void> = async () => {},
+  ) {}
+  async init() {
+    this.db = await openAgentDB();
+    const workspaces = (await this.db.getAll('workspaces')).sort(
+      (a, b) => b.updatedAt - a.updatedAt,
+    );
+    const latest = workspaces.find((workspace) => workspace.targetTabId === this.tabId);
+    this.workspace = latest
+      ? new WorkspaceService(this.db, latest.id)
+      : await WorkspaceService.create(this.db, this.targetUrl, this.tabId);
+    try {
+      this.releaseWorkspace = await acquireWorkspaceLease(this.workspace.id);
+    } catch {
+      this.workspace = await WorkspaceService.create(this.db, this.targetUrl, this.tabId);
+      this.releaseWorkspace = await acquireWorkspaceLease(this.workspace.id);
+    }
+    await this.workspace.patchMetadata({ targetUrl: this.targetUrl });
+    // Never resume an interrupted action. Reconcile its outcome explicitly in a new task.
+    for (const run of await this.db.getAllFromIndex('runs', 'workspaceId', this.workspace.id))
+      if (ACTIVE.has(run.status))
+        await this.db.put('runs', { ...run, status: 'interrupted', endedAt: Date.now() });
+    for (const operation of await this.db.getAllFromIndex(
+      'operations',
+      'workspaceId',
+      this.workspace.id,
+    ))
+      if (operation.status === 'started')
+        await this.db.put('operations', { ...operation, status: 'unknown' });
+    this.browser = this.createBrowser();
+    await this.loadWorkspace();
+    return this;
+  }
+  private createBrowser() {
+    return new BrowserSession(
+      this.tabId,
+      this.workspace,
+      () => this.publish(),
+      (reason) => {
+        this.error = `调试连接已断开：${reason}`;
+        this.stop();
+        this.publish();
+      },
+      this.beforeAttach,
+      (url) => {
+        this.targetUrl = url;
+        void this.workspace.patchMetadata({ targetUrl: url }).catch((error) => {
+          this.error = errorData(error).message;
+          this.publish();
+        });
+      },
+    );
+  }
+  private async loadWorkspace() {
+    this.workspace.changed = () => this.publish();
+    this.scripts = new ScriptService(this.workspace, this.adapter);
+    this.fileTools = new FileTools(this.workspace);
+    this.repl?.stop();
+    this.repl = new ReplClient((method, args) => this.hostCall(method, args));
+    const storedMessages = (await this.db.get('conversations', this.workspace.id))?.messages ?? [];
+    this.messages = normalizeMessageIds(storedMessages);
+    if (this.messages.some((message, index) => message !== storedMessages[index]))
+      await this.persistMessages();
+    this.conversationId = (await this.workspace.metadata()).conversationId ?? this.workspace.id;
+    this.run = (await this.db.getAllFromIndex('runs', 'workspaceId', this.workspace.id))
+      .filter((run) => (run.conversationId ?? run.workspaceId) === this.conversationId)
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+  }
+  attach(port: MessagePort) {
+    for (const previous of this.ports) previous.close();
+    this.ports.clear();
+    this.ports.add(port);
+    port.onmessage = async ({ data }: MessageEvent<PortRequest>) => {
+      if (data.type !== 'request') return;
+      try {
+        port.postMessage({
+          type: 'response',
+          id: data.id,
+          result: await this.dispatch(data.method, data.args),
+        });
+      } catch (error) {
+        port.postMessage({ type: 'response', id: data.id, error: errorData(error) });
+      }
+    };
+    port.onmessageerror = () => {
+      this.ports.delete(port);
+      port.close();
+    };
+    port.start();
+    this.publish();
+  }
+  async snapshot(): Promise<Snapshot> {
+    return {
+      workspace: await this.workspace.metadata(),
+      files: await this.workspace.allFiles(),
+      messages: this.messages,
+      run: this.run,
+      connected: this.browser.connected,
+      events: this.browser.recentEvents(),
+      history: (await this.db.getAll('workspaces')).sort((a, b) => b.updatedAt - a.updatedAt),
+      operations: (await this.db.getAllFromIndex('operations', 'workspaceId', this.workspace.id))
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .slice(0, 100),
+      error: this.error,
+    };
+  }
+  private emit(event: PortEvent) {
+    for (const port of this.ports)
+      try {
+        port.postMessage(event);
+      } catch {
+        this.ports.delete(port);
+      }
+  }
+  private publish() {
+    if (this.timer) return;
+    this.timer = setTimeout(async () => {
+      this.timer = undefined;
+      try {
+        this.emit({ type: 'event', event: 'snapshot', data: await this.snapshot() });
+      } catch (error) {
+        console.error(error);
+      }
+    }, 100);
+  }
+  async dispatch(method: string, args: unknown[]): Promise<unknown> {
+    if (
+      this.clearing &&
+      [
+        'chat.start',
+        'chat.resume',
+        'chat.queue',
+        'workspace.new',
+        'workspace.open',
+        'repl.run',
+        'scripts.import',
+        'scripts.apply',
+        'scripts.setEnabled',
+        'browser.connect',
+      ].includes(method)
+    )
+      throw new AgentError('busy', 'Wait for the conversation context to finish clearing.');
+    // Explicit surface, never index arbitrary properties on privileged services.
+    switch (method) {
+      case 'snapshot':
+        return this.snapshot();
+      case 'error.clear':
+        this.error = undefined;
+        this.publish();
+        return;
+      case 'settings.get':
+        return loadSettings();
+      case 'settings.save':
+        return saveSettings(args[0] as ModelSettings);
+      case 'settings.check':
+        return checkConnection(args[0] as ModelSettings);
+      case 'chat.start': {
+        if (this.streamTask) throw new AgentError('busy', 'A task is already running.');
+        const [streamId, messages, conversationId] = args as [string, UIMessage[], string];
+        if (conversationId !== this.conversationId)
+          throw new AgentError(
+            'context_changed',
+            'The conversation was reset. Send from the current conversation.',
+          );
+        this.activeStream = streamId;
+        this.chunks = [];
+        this.streamTask = this.start(messages).finally(() => {
+          this.streamTask = undefined;
+        });
+        return { streamId };
+      }
+      case 'chat.resume': {
+        if (args[2] !== this.conversationId || !this.streamTask || !this.activeStream) return null;
+        const streamId = args[0] as string;
+        this.activeStream = streamId;
+        for (const chunk of this.chunks)
+          this.emit({ type: 'event', event: 'chunk', streamId, data: chunk });
+        return { streamId };
+      }
+      case 'chat.clear':
+        return (this.clearing ??= this.clearConversation().finally(() => {
+          this.clearing = undefined;
+        }));
+      case 'chat.queue': {
+        if (!this.streamTask || !this.run || !this.abort || this.abort.signal.aborted)
+          throw new AgentError('not_running', 'No running task to steer.');
+        const text = String(args[0]).trim();
+        if (!text || text.length > 100000)
+          throw new AgentError('invalid_input', 'Message is empty or too long.');
+        this.run.queued.push(text);
+        await this.saveRun();
+        return;
+      }
+      case 'stop':
+        return this.stop();
+      case 'browser.connect':
+        return this.browser.connect();
+      case 'browser.disconnect': {
+        this.stop();
+        return this.browser.disconnect();
+      }
+      case 'repl.run': {
+        const [code, timeoutMs] = args as [string, number?];
+        return this.execute('repl', { code, timeoutMs }, () =>
+          this.repl.run(code, timeoutMs, this.operationSignal),
+        );
+      }
+      case 'files.write':
+        return this.workspace.write(...(args as [string, string, string?]));
+      case 'files.rename':
+        return this.workspace.rename(...(args as [string, string, string]));
+      case 'files.remove':
+        return this.workspace.remove(...(args as [string, string]));
+      case 'files.read':
+        return this.workspace.read(args[0] as string);
+      case 'files.baseline': {
+        const [path, mode] = args as [string, string];
+        const meta = await this.workspace.metadata();
+        if (mode === 'installed') return meta.bindings[path]?.installedCode ?? '';
+        return meta.baseline[path]
+          ? ((await this.workspace.revision(meta.baseline[path]))?.content ?? '')
+          : '';
+      }
+      case 'scripts.list':
+        return this.scripts.list();
+      case 'scripts.status':
+        return this.scripts.status(args[0] as string);
+      case 'scripts.import':
+        return this.execute(method, args, () => this.scripts.import(...(args as [string, string])));
+      case 'scripts.apply':
+        return this.execute(method, args, () => this.scripts.apply(args[0] as string));
+      case 'scripts.setEnabled':
+        return this.execute(method, args, () =>
+          this.scripts.setEnabled(...(args as [string, boolean])),
+        );
+      case 'workspace.new':
+        return this.switchWorkspace();
+      case 'workspace.open':
+        return this.switchWorkspace(args[0] as string);
+      case 'artifact.get': {
+        const ref = await this.db.get('artifacts', args[0] as string);
+        if (ref?.workspaceId !== this.workspace.id)
+          throw new AgentError('not_found', 'Artifact not found.');
+        return ref;
+      }
+      case 'artifacts.list':
+        return (await this.db.getAllFromIndex('artifacts', 'workspaceId', this.workspace.id)).map(
+          ({ blob: _, ...ref }) => ref,
+        );
+      default:
+        throw new AgentError('unknown_method', `Unknown controller method: ${method}`);
+    }
+  }
+  private async switchWorkspace(id?: string) {
+    if (this.streamTask || this.queue.size)
+      throw new AgentError(
+        'busy',
+        'Stop the current task and wait for tools to finish before switching sessions.',
+      );
+    if (id === this.workspace.id) return this.snapshot();
+    const next = id
+      ? new WorkspaceService(this.db, id)
+      : await WorkspaceService.create(this.db, this.targetUrl, this.tabId);
+    await next.metadata();
+    const release = await acquireWorkspaceLease(next.id);
+    await next.patchMetadata({ targetUrl: this.targetUrl });
+    this.repl.stop();
+    this.workspace = next;
+    this.releaseWorkspace?.();
+    this.releaseWorkspace = release;
+    // A fresh BrowserSession changes the artifact destination and clears context handles/state.
+    await this.browser.dispose();
+    this.browser = this.createBrowser();
+    await this.loadWorkspace();
+    this.error = undefined;
+    this.publish();
+    return this.snapshot();
+  }
+  private async clearConversation() {
+    this.stop();
+    // Let persistence and queued tools settle before deleting messages. A late stream must
+    // never repopulate the cleared conversation or continue with the next user request.
+    await this.streamTask;
+    await this.queue.onIdle();
+    const conversationId = crypto.randomUUID();
+    const tx = this.db.transaction(['workspaces', 'conversations', 'runs'], 'readwrite');
+    const workspace = await tx.objectStore('workspaces').get(this.workspace.id);
+    if (!workspace) throw new AgentError('not_found', 'Workspace not found.');
+    await tx.objectStore('workspaces').put({
+      ...workspace,
+      conversationId,
+      title: '新会话',
+      updatedAt: Date.now(),
+    });
+    await tx.objectStore('conversations').put({ id: this.workspace.id, messages: [] });
+    if (this.run) await tx.objectStore('runs').put({ ...this.run, queued: [] });
+    await tx.done;
+    this.conversationId = conversationId;
+    this.messages = [];
+    this.fileTools.reset();
+    this.run = undefined;
+    this.consumed = [];
+    this.chunks = [];
+    this.activeStream = undefined;
+    this.error = undefined;
+    this.publish();
+    return this.snapshot();
+  }
+  private async start(messages: UIMessage[]) {
+    messages = normalizeMessageIds(messages);
+    const abort = (this.abort = new AbortController());
+    this.messages = [...messages];
+    this.error = undefined;
+    this.consumed = [];
+    this.run = {
+      id: crypto.randomUUID(),
+      workspaceId: this.workspace.id,
+      conversationId: this.conversationId,
+      startedAt: Date.now(),
+      status: 'generating',
+      queued: [],
+      steps: [],
+    };
+    let failed = false;
+    try {
+      await this.workspace.captureBaseline();
+      await this.persistMessages();
+      await this.saveRun();
+      const lastText =
+        messages
+          .at(-1)
+          ?.parts.filter((p) => p.type === 'text')
+          .map((p) => p.text)
+          .join(' ') ?? '';
+      if (messages.filter((m) => m.role === 'user').length === 1)
+        await this.workspace.patchMetadata({ title: lastText.slice(0, 60) || '新会话' });
+      const settings = await loadSettings();
+      this.run.model = {
+        provider: settings.provider,
+        baseURL: settings.baseURL,
+        model: settings.model,
+        supportsImages: settings.supportsImages,
+      };
+      const target = await chrome.tabs.get(this.tabId);
+      this.targetUrl = target.url ?? this.targetUrl;
+      await this.workspace.patchMetadata({ targetUrl: this.targetUrl });
+      const tools = createTools({
+        workspace: this.workspace,
+        fileTools: this.fileTools,
+        supportsImages: settings.supportsImages,
+        execute: (name, input, fn, signal) => this.execute(name, input, fn, signal),
+        repl: (code, timeout, signal) =>
+          this.repl.run(code, timeout, this.operationSignal ?? signal),
+      });
+      const directory = await this.workspace.list();
+      let steps = 0;
+      const agent = new ToolLoopAgent({
+        model: createModel(settings),
+        tools,
+        activeTools: [...ACTIVE_TOOLS],
+        stopWhen: isStepCount(30),
+        toolCallConcurrency: 1,
+        maxRetries: 1,
+        instructions: `${INSTRUCTIONS}\nImage input: ${settings.supportsImages ? 'enabled' : 'disabled; screenshots can be saved but you cannot inspect pixels'}\nBound inspected tab: ${this.tabId}\nTarget URL: ${this.targetUrl}\nWorkspace directory: ${JSON.stringify(directory)}\nInterrupted operations: ${JSON.stringify((await this.db.getAllFromIndex('operations', 'workspaceId', this.workspace.id)).filter((op) => op.status === 'unknown').map(({ id, name }) => ({ id, name })))}`,
+        prepareStep: async ({ messages: stepMessages }) => {
+          this.run!.status = 'generating';
+          const queued = this.run!.queued.splice(0);
+          this.consumed.push(
+            ...queued.map((text) => ({
+              id: crypto.randomUUID(),
+              role: 'user' as const,
+              parts: [{ type: 'text' as const, text }],
+            })),
+          );
+          for (const message of this.consumed)
+            if (!this.messages.some((existing) => existing.id === message.id))
+              this.messages.push(message);
+          await this.persistMessages();
+          await this.saveRun();
+          return queued.length
+            ? {
+                messages: [
+                  ...stepMessages,
+                  ...queued.map((content) => ({ role: 'user' as const, content })),
+                ],
+              }
+            : {};
+        },
+        onStepEnd: async (step) => {
+          steps++;
+          this.run!.steps!.push({
+            index: steps,
+            endedAt: Date.now(),
+            finishReason: step.finishReason,
+            inputTokens: step.usage.inputTokens,
+            outputTokens: step.usage.outputTokens,
+            toolCalls: step.toolCalls.map(({ toolCallId, toolName }) => ({ toolCallId, toolName })),
+          });
+          await this.saveRun();
+        },
+      });
+      const result = await agent.stream({
+        messages: await convertToModelMessages(messages, {
+          tools,
+          ignoreIncompleteToolCalls: true,
+        }),
+        abortSignal: abort.signal,
+      });
+      const stream = result.toUIMessageStream({
+        originalMessages: messages,
+        generateMessageId: () => crypto.randomUUID(),
+        sendReasoning: false,
+        onError: (error) => {
+          // SDK invokes this for recoverable tool validation errors as well as fatal errors.
+          // Only a real `error` stream chunk (handled below) fails the run.
+          if (InvalidToolInputError.isInstance(error)) return toolInputHint(error.toolName);
+          if (NoSuchToolError.isInstance(error))
+            return 'Unknown tool. Available tools are Read, Write, Edit, Glob, Grep and repl; read /docs/agent-guide.md.';
+          return errorData(error).message;
+        },
+      });
+      const [ui, persistence] = stream.tee();
+      const consumeUI = (async () => {
+        for await (const chunk of ui) {
+          this.chunks.push(chunk);
+          this.emit({ type: 'event', event: 'chunk', streamId: this.activeStream, data: chunk });
+        }
+      })();
+      for await (const message of readUIMessageStream({
+        stream: persistence,
+        onError: (error) => {
+          failed = true;
+          this.error ??= errorData(error).message;
+        },
+      })) {
+        this.messages = [...messages, message, ...this.consumed];
+        await this.persistMessages();
+        this.publish();
+      }
+      await consumeUI;
+      this.run.finishReason = failed ? 'error' : await result.finishReason;
+      if (this.run.finishReason === 'error') failed = true;
+      this.run.status = abort.signal.aborted
+        ? 'interrupted'
+        : failed
+          ? 'failed'
+          : steps >= 30
+            ? 'limit_reached'
+            : 'completed';
+      if (failed) this.run.error = this.error ?? 'Model stream ended with an error.';
+    } catch (error) {
+      this.error ??= errorData(error).message;
+      this.run.status = abort.signal.aborted ? 'interrupted' : 'failed';
+      this.run.error = this.error;
+      this.emit({
+        type: 'event',
+        event: 'stream-error',
+        streamId: this.activeStream,
+        data: this.error,
+      });
+    } finally {
+      for (const message of this.consumed)
+        if (!this.messages.some((existing) => existing.id === message.id))
+          this.messages.push(message);
+      this.run.endedAt = Date.now();
+      try {
+        await this.persistMessages();
+        await this.saveRun();
+      } catch (error) {
+        this.error = errorData(error).message;
+        this.emit({
+          type: 'event',
+          event: 'stream-error',
+          streamId: this.activeStream,
+          data: this.error,
+        });
+      } finally {
+        this.emit({ type: 'event', event: 'stream-end', streamId: this.activeStream, data: null });
+        this.abort = undefined;
+        this.publish();
+      }
+    }
+  }
+  stop() {
+    this.abort?.abort();
+    this.toolsAbort.abort();
+    this.toolsAbort = new AbortController();
+    this.repl?.stop();
+    void this.browser?.releaseExecution();
+    if (this.run && ACTIVE.has(this.run.status)) {
+      this.run.status = 'stopping';
+      void this.saveRun();
+    }
+  }
+  private async execute(
+    name: string,
+    input: unknown,
+    fn: () => Promise<unknown>,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
+    signal = AbortSignal.any([this.toolsAbort.signal, ...(signal ? [signal] : [])]);
+    return this.queue.execute(async () => {
+      const start = performance.now();
+      const operation: OperationRecord = {
+        id: crypto.randomUUID(),
+        workspaceId: this.workspace.id,
+        runId: this.abort ? this.run?.id : undefined,
+        name,
+        input,
+        status: 'started',
+        startedAt: Date.now(),
+      };
+      await this.db.put('operations', operation);
+      if (this.abort && this.run) {
+        this.run.status = 'executing';
+        await this.saveRun();
+      }
+      this.publish();
+      this.operationSignal = signal;
+      let result: ToolResult;
+      try {
+        const value = await fn();
+        signal?.throwIfAborted();
+        const artifacts = findArtifacts(value);
+        const text = JSON.stringify(value ?? null);
+        result =
+          text.length > 128 * 1024
+            ? {
+                success: true,
+                value: {
+                  preview: text.slice(0, 32000),
+                  artifact: await this.workspace.artifact(
+                    new Blob([text], { type: 'application/json' }),
+                    'result.json',
+                  ),
+                },
+                durationMs: performance.now() - start,
+                artifacts,
+                truncated: true,
+              }
+            : {
+                success: true,
+                value,
+                durationMs: performance.now() - start,
+                ...(artifacts.length ? { artifacts } : {}),
+              };
+        if (name === 'repl' && this.repl.warnings.length) result.warnings = this.repl.warnings;
+        operation.status = 'completed';
+      } catch (error) {
+        result = { success: false, error: errorData(error), durationMs: performance.now() - start };
+        operation.status =
+          signal?.aborted || result.error?.code === 'timeout' ? 'unknown' : 'failed';
+      }
+      operation.endedAt = Date.now();
+      operation.output = result;
+      this.operationSignal = undefined;
+      await this.db.put('operations', operation);
+      this.publish();
+      return result;
+    }, signal);
+  }
+  private async hostCall(method: string, args: unknown[]): Promise<unknown> {
+    const signal = this.operationSignal;
+    signal?.throwIfAborted();
+    validateHostCall(method, args);
+    switch (method) {
+      case 'runtime.sleep':
+        return sleep(args[0] as number, signal);
+      case 'fs.list':
+        return this.workspace.list(...(args as [string?]));
+      case 'fs.read':
+        return this.workspace.read(...(args as [string, { offset?: number; limit?: number }?]));
+      case 'fs.write':
+        return fileSummary(await this.workspace.write(...(args as [string, string, string?])));
+      case 'fs.edit':
+        return fileSummary(
+          await this.workspace.edit(...(args as [string, string, string, string])),
+        );
+      case 'fs.remove':
+        return this.workspace.remove(...(args as [string, string]));
+      case 'fs.rename':
+        return fileSummary(await this.workspace.rename(...(args as [string, string, string])));
+      case 'fs.search':
+        return this.workspace.search(...(args as [string, string?]));
+      case 'browser.connect':
+        return this.browser.connect();
+      case 'browser.disconnect':
+        return this.browser.disconnect();
+      case 'browser.evaluate':
+        return this.browser.evaluate(
+          ...(args as [string, { contextId?: number; sessionId?: string }?]),
+        );
+      case 'browser.send':
+        return this.browser.send(...(args as [string, Record<string, unknown>?, string?]));
+      case 'browser.contexts':
+        return this.browser.contexts();
+      case 'browser.events':
+        return this.browser.events(...(args as [Parameters<BrowserSession['events']>[0]?]));
+      case 'browser.waitForEvent':
+        return this.browser.waitForEvent(args[0] as string, args[1] as object, signal);
+      case 'browser.reload':
+        return this.browser.reload(args[0] as object, signal);
+      case 'browser.navigate':
+        return this.browser.navigate(args[0] as string, args[1] as object, signal);
+      case 'browser.screenshot':
+        return this.browser.screenshot(...(args as [object?]));
+      case 'browser.responseBody':
+        return this.browser.responseBody(...(args as [string, string?]));
+      case 'browser.verify': {
+        const [path, expression] = args as [string, string];
+        const passed = await this.browser.evaluate(expression);
+        if (typeof passed !== 'boolean')
+          throw new AgentError(
+            'invalid_verification',
+            'Verification expression must return a boolean.',
+          );
+        return this.scripts.verify(path, passed, expression);
+      }
+      case 'scripts.list':
+        return this.scripts.list();
+      case 'scripts.import':
+        return fileSummary(await this.scripts.import(...(args as [string, string])));
+      case 'scripts.apply': {
+        return installedSummary(await this.scripts.apply(...(args as [string])));
+      }
+      case 'scripts.status':
+        return this.scripts.status(...(args as [string]));
+      case 'scripts.setEnabled':
+        return this.scripts.setEnabled(...(args as [string, boolean]));
+      default:
+        throw new AgentError('unknown_host_method', method);
+    }
+  }
+  private async persistMessages() {
+    await this.db.put('conversations', { id: this.workspace.id, messages: this.messages });
+  }
+  private async saveRun() {
+    if (this.run) await this.db.put('runs', this.run);
+    this.publish();
+  }
+}

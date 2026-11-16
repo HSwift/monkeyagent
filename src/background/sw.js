@@ -11,6 +11,8 @@ import { kAlarmRemove, kAlarmSync, kAlarmUpdate, kNotifications } from './utils/
 import { resolveVirtualUrl } from './utils/tab-redirector';
 import { autoUpdate } from './utils/update';
 import { handleCommandMessage } from '.';
+import './utils/agent-script-api';
+import '../../packages/devtools-agent/src/background/lifecycle';
 
 const GET_DATA_URL = extensionRoot + 'get-data.js';
 
