@@ -1,6 +1,4 @@
 const { resolve } = require('path');
-const { VueLoaderPlugin } = require('vue-loader');
-const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const CssMinimizerPlugin = require('css-minimizer-webpack-plugin');
@@ -8,7 +6,6 @@ const InlineConstantExportsPlugin = require('@automattic/webpack-inline-constant
 const TerserPlugin = require('terser-webpack-plugin');
 const deepmerge = require('deepmerge');
 const escapeStringRegexp = require('escape-string-regexp').default;
-const GroupAssetsPlugin = require('./webpack-group-assets-plugin');
 const { alias, extensions, isProd, MV3, DIST } = require('./common');
 
 const defaultHtmlOptions = {
@@ -45,6 +42,7 @@ const MIN_OPTS_PUBLIC = isProd && {
 const MIN_OPTS_MAIN = isProd && deepmerge.all([{}, MIN_OPTS, {
   exclude: 'public/',
   terserOptions: {
+    toplevel: true, // drop unused global vars and funcs
     compress: {
       ecma: 8, // ES2017 Object.entries and so on
       passes: 2, // necessary now since we removed plaid's minimizer
@@ -120,6 +118,18 @@ const styleOptions = {
 const postcssLoader = {
   loader: 'postcss-loader',
 };
+const sharedPlugins = [
+  new InlineConstantExportsPlugin([
+    RegExp(`/(${[
+      'consts.js',
+      'consts-sync.js',
+      'utils/dnr.js',
+      'utils/on-installed.js',
+      'utils/storage.js',
+    ].map(escapeStringRegexp).join('|')
+    })$`.replaceAll('/', String.raw`[/\\]`)),
+  ]),
+];
 const getBaseConfig = (page) => ({
   mode: isProd ? 'production' : 'development',
   target: 'web', // required by live reloading
@@ -211,6 +221,7 @@ const getBaseConfig = (page) => ({
   },
   optimization: {
     concatenateModules: true, // makes output simpler and closer to prod in debugging
+    inlineExports: true, // to match prod in dev
     runtimeChunk: false,
     splitChunks: !page && {
       cacheGroups: {
@@ -237,25 +248,7 @@ const getBaseConfig = (page) => ({
     ].filter(Boolean) : [],
   },
   plugins: [
-    page === 'sw' && MV3 && new webpack.NormalModuleReplacementPlugin(/\/common\/tld$/, (r) => {
-      r.request += '-mv3';
-    }),
-    !page && new VueLoaderPlugin(),
-    !page && new GroupAssetsPlugin(),
-    !page && styleOptions.extract && new MiniCssExtractPlugin({
-      filename: '[name].css',
-    }),
-    !page && require('unplugin-icons/webpack')(),
-    new InlineConstantExportsPlugin([
-      RegExp(`/(${[
-        'consts.js',
-        'consts-sync.js',
-        'utils/dnr.js',
-        'utils/on-installed.js',
-        'utils/storage.js',
-      ].map(escapeStringRegexp).join('|')
-      })$`.replaceAll('/', String.raw`[/\\]`)),
-    ])
+    ...sharedPlugins,
   ].filter(Boolean),
 });
 
