@@ -45,17 +45,24 @@ export interface ScriptBinding {
 }
 export interface WorkspaceRecord {
   id: string;
+  site: string;
+  updatedAt: number;
+  bindings: Record<string, ScriptBinding>;
+}
+export interface SessionRecord {
+  id: string;
+  workspaceId: string;
   conversationId?: string;
   title: string;
   targetUrl: string;
   targetTabId?: number;
   updatedAt: number;
-  bindings: Record<string, ScriptBinding>;
   baseline: Record<string, string>;
 }
 export interface RunRecord {
   id: string;
   workspaceId: string;
+  sessionId: string;
   conversationId?: string;
   status: RunStatus;
   startedAt: number;
@@ -76,6 +83,7 @@ export interface RunRecord {
 export interface OperationRecord {
   id: string;
   workspaceId: string;
+  sessionId: string;
   runId?: string;
   name: string;
   input: unknown;
@@ -92,6 +100,7 @@ export interface ArtifactRef {
 }
 export interface ArtifactRecord extends ArtifactRef {
   workspaceId: string;
+  sessionId?: string;
   blob: Blob;
   createdAt: number;
 }
@@ -112,12 +121,13 @@ export interface ModelSettings {
 }
 export interface Snapshot {
   workspace: WorkspaceRecord;
+  session: SessionRecord;
   files: FileRecord[];
   messages: UIMessage[];
   run?: RunRecord;
   connected: boolean;
   events: BrowserEvent[];
-  history: WorkspaceRecord[];
+  history: SessionRecord[];
   operations: OperationRecord[];
   error?: string;
 }

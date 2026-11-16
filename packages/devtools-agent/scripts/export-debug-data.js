@@ -2,8 +2,8 @@
 // Paste this entire file into the extension Service Worker DevTools Console.
 // Read-only: no database writes, no model requests, no UI changes or extension reload needed.
 (async (copyToClipboard) => {
-  // Leave empty for the most recently used workspace, or paste an ID from the printed table.
-  const workspaceId = '';
+  // Leave empty for the most recently used session, or paste an ID from the printed table.
+  const sessionId = '';
   const databaseName = 'monkeyagent-devtools-v1';
   const read = request => new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -15,21 +15,24 @@
   const db = await read(indexedDB.open(databaseName));
   let records;
   try {
-    const workspaces = (await read(db.transaction('workspaces').objectStore('workspaces').getAll()))
+    const sessions = (await read(db.transaction('sessions').objectStore('sessions').getAll()))
       .sort((a, b) => b.updatedAt - a.updatedAt);
-    console.table(workspaces.map(({ id, title, updatedAt }) => ({
-      id, title, updatedAt: new Date(updatedAt).toISOString(),
+    console.table(sessions.map(({ id, title, targetUrl, updatedAt }) => ({
+      id, title, targetUrl, updatedAt: new Date(updatedAt).toISOString(),
     })));
-    const selected = workspaceId ? workspaces.find(item => item.id === workspaceId) : workspaces[0];
-    if (!selected) throw new Error('Workspace not found. Set workspaceId to an ID from the table.');
-    const indexedStores = ['runs', 'operations', 'files', 'revisions', 'artifacts'];
-    const tx = db.transaction(['workspaces', 'conversations', ...indexedStores], 'readonly');
-    const [workspace, conversation, ...values] = await Promise.all([
-      read(tx.objectStore('workspaces').get(selected.id)),
+    const selected = sessionId ? sessions.find(item => item.id === sessionId) : sessions[0];
+    if (!selected) throw new Error('Session not found. Set sessionId to an ID from the table.');
+    const indexedStores = ['files', 'revisions', 'artifacts'];
+    const tx = db.transaction(['workspaces', 'sessions', 'conversations', 'runs', 'operations', ...indexedStores], 'readonly');
+    const [workspace, session, conversation, runs, operations, ...values] = await Promise.all([
+      read(tx.objectStore('workspaces').get(selected.workspaceId)),
+      read(tx.objectStore('sessions').get(selected.id)),
       read(tx.objectStore('conversations').get(selected.id)),
-      ...indexedStores.map(name => read(tx.objectStore(name).index('workspaceId').getAll(selected.id))),
+      read(tx.objectStore('runs').index('sessionId').getAll(selected.id)),
+      read(tx.objectStore('operations').index('sessionId').getAll(selected.id)),
+      ...indexedStores.map(name => read(tx.objectStore(name).index('workspaceId').getAll(selected.workspaceId))),
     ]);
-    records = { workspace, conversation: conversation || { id: selected.id, messages: [] }, ...Object.fromEntries(indexedStores.map((name, i) => [name, values[i]])) };
+    records = { workspace, session, conversation: conversation || { id: selected.id, messages: [] }, runs, operations, ...Object.fromEntries(indexedStores.map((name, i) => [name, values[i]])) };
   } finally {
     db.close();
   }
@@ -94,7 +97,7 @@
   }
   const manifest = chrome.runtime.getManifest();
   const trace = redact({
-    format: 'monkeyagent-debug', schemaVersion: 1, exportedAt: new Date().toISOString(),
+    format: 'monkeyagent-debug', schemaVersion: 2, exportedAt: new Date().toISOString(),
     runtime: { extension: manifest.name, version: manifest.version, userAgent: navigator.userAgent },
     configurationAtExport: {
       provider: settings.provider, baseURL: settings.baseURL, model: settings.model,
@@ -110,7 +113,7 @@
   });
   copyToClipboard(JSON.stringify(trace, null, 2));
   console.info('Agent 调试数据已复制。请粘贴保存为 monkeyagent-debug.json。', {
-    workspaceId: trace.workspace.id, title: trace.workspace.title,
+    workspaceId: trace.workspace.id, sessionId: trace.session.id, title: trace.session.title,
     messages: trace.conversation.messages.length, runs: trace.runs.length,
     operations: trace.operations.length, files: trace.files.length,
   });

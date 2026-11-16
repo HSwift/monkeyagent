@@ -260,7 +260,13 @@ export function WorkspacePane({
       </div>
       <div className="workspace-content" hidden={view !== 'changes'}>
         {file ? (
-          <Changes client={client} file={file} snapshot={snapshot} report={report} />
+          <Changes
+            key={`${snapshot.session.id}:${file.path}`}
+            client={client}
+            file={file}
+            snapshot={snapshot}
+            report={report}
+          />
         ) : (
           <div className="empty-workspace">选择一个文件查看变更</div>
         )}
@@ -532,12 +538,27 @@ function Changes({
 }) {
   const [mode, setMode] = useState('task');
   const [before, setBefore] = useState('');
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    client.call<string>('files.baseline', file.path, mode).then(setBefore).catch(report);
+    let cancelled = false;
+    setLoaded(false);
+    client
+      .call<string>('files.baseline', file.path, mode)
+      .then((value) => {
+        if (cancelled) return;
+        setBefore(value);
+        setLoaded(true);
+      })
+      .catch(report);
+    return () => {
+      cancelled = true;
+    };
   }, [
     file.path,
     mode,
-    snapshot.workspace.baseline[file.path],
+    snapshot.workspace.id,
+    snapshot.session.id,
+    snapshot.session.baseline[file.path],
     snapshot.workspace.bindings[file.path]?.fileRevision,
   ]);
   async function restore() {
@@ -555,7 +576,10 @@ function Changes({
           <option value="task">本轮任务开始时</option>
           <option value="installed">最近安装版本</option>
         </select>
-        <Button onClick={() => void restore().catch(report)} disabled={before === file.content}>
+        <Button
+          onClick={() => void restore().catch(report)}
+          disabled={!loaded || before === file.content}
+        >
           <RotateCcw size={12} />
           恢复基线
         </Button>

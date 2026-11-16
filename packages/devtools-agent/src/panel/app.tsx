@@ -74,6 +74,11 @@ export function App({ client }: { client: ControllerClient }) {
     return unsubscribe;
   }, []);
   useEffect(() => {
+    setAttachment(undefined);
+    setError('');
+    setClearOpen(false);
+  }, [snapshot?.session.id]);
+  useEffect(() => {
     const stop = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key === '.') {
         event.preventDefault();
@@ -107,7 +112,7 @@ export function App({ client }: { client: ControllerClient }) {
       setSelectedPath(snapshot.files[0].path);
   }, [snapshot?.files.map((file) => file.path).join('|')]);
   async function newSession() {
-    const value = await client.call<Snapshot>('workspace.new');
+    const value = await client.call<Snapshot>('session.new');
     setSnapshot(value);
     setAttachment(undefined);
     setDrawerOpen(false);
@@ -141,7 +146,7 @@ export function App({ client }: { client: ControllerClient }) {
   }
   let host = '';
   try {
-    host = new URL(snapshot?.workspace.targetUrl ?? '').host;
+    host = new URL(snapshot?.session.targetUrl ?? '').host;
   } catch {}
   return (
     <Tooltip.Provider delayDuration={300}>
@@ -241,7 +246,7 @@ export function App({ client }: { client: ControllerClient }) {
           <main className="main-layout">
             <div className="chat-layout" inert={drawerOpen}>
               <ChatArea
-                key={snapshot.workspace.conversationId ?? snapshot.workspace.id}
+                key={snapshot.session.conversationId ?? snapshot.session.id}
                 client={client}
                 snapshot={snapshot}
                 openFile={openFile}
@@ -270,6 +275,7 @@ export function App({ client }: { client: ControllerClient }) {
             >
               <Suspense fallback={<div className="loading-app">正在打开…</div>}>
                 <WorkspacePane
+                  key={snapshot.workspace.id}
                   client={client}
                   snapshot={snapshot}
                   selectedPath={selectedPath}
@@ -333,14 +339,14 @@ export function App({ client }: { client: ControllerClient }) {
           sheet
         >
           <Scroller className="history-list">
-            {snapshot?.history.map((workspace) => (
+            {snapshot?.history.map((session) => (
               <button
-                key={workspace.id}
-                className={`history-item ${workspace.id === snapshot.workspace.id ? 'selected' : ''}`}
+                key={session.id}
+                className={`history-item ${session.id === snapshot.session.id ? 'selected' : ''}`}
                 disabled={clearing || running(snapshot)}
                 onClick={() =>
                   void client
-                    .call<Snapshot>('workspace.open', workspace.id)
+                    .call<Snapshot>('session.open', session.id)
                     .then((value) => {
                       setSnapshot(value);
                       setAttachment(undefined);
@@ -349,9 +355,9 @@ export function App({ client }: { client: ControllerClient }) {
                     .catch(report)
                 }
               >
-                <strong>{workspace.title}</strong>
-                <span>{workspace.targetUrl}</span>
-                <time>{new Date(workspace.updatedAt).toLocaleString()}</time>
+                <strong>{session.title}</strong>
+                <span>{session.targetUrl}</span>
+                <time>{new Date(session.updatedAt).toLocaleString()}</time>
               </button>
             ))}
           </Scroller>
@@ -383,7 +389,7 @@ function ChatArea({
   host: string;
   configured: boolean;
 }) {
-  const conversationId = snapshot.workspace.conversationId ?? snapshot.workspace.id;
+  const conversationId = snapshot.session.conversationId ?? snapshot.session.id;
   const transport = useMemo(
     () => new ControllerChatTransport(client, conversationId),
     [client, conversationId],
@@ -497,7 +503,7 @@ function ChatArea({
             <IconButton label="添加文件" onClick={openWorkspace}>
               <Plus size={19} />
             </IconButton>
-            <span className="prompt-context" title={snapshot.workspace.targetUrl}>
+            <span className="prompt-context" title={snapshot.session.targetUrl}>
               <Globe2 size={12} />
               {host || '当前网页'}
             </span>

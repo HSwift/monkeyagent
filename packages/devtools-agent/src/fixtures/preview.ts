@@ -36,5 +36,7 @@ export async function startPreview(client: ControllerClient) {
   const channel = new MessageChannel();
   controller.attach(channel.port1);
   client.connect(channel.port2);
-  window.addEventListener('pagehide', () => controller.stop());
+  window.addEventListener('pagehide', () => {
+    void controller.dispose();
+  });
 }

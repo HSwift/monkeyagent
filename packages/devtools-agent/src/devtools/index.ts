@@ -36,6 +36,6 @@ if (chrome.devtools?.panels) {
   document.body.append(panel);
 }
 window.addEventListener('pagehide', () => {
-  controller.stop();
+  void controller.dispose();
   lifecycle.dispose();
 });

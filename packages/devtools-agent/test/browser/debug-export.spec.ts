@@ -2,7 +2,7 @@ import { test, expect, chromium } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { instrumentPanel, rpc, routeExampleSite } from './helpers';
 
-test('internal console export reads a single workspace without changing data and redacts credentials', async () => {
+test('internal console export reads a session and its site workspace without changing data and redacts credentials', async () => {
   const extension = new URL('../../fixtures/extension/', import.meta.url).pathname;
   const context = await chromium.launchPersistentContext('', {
     channel: 'chromium',
@@ -12,6 +12,9 @@ test('internal console export reads a single workspace without changing data and
   try {
     await instrumentPanel(context);
     await routeExampleSite(context);
+    await context.route('https://example.org/**', (route) =>
+      route.fulfill({ contentType: 'text/html', body: '<title>Other site</title>' }),
+    );
     const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
     await context.pages()[0].goto('https://example.com/');
     const tabId = (await worker.evaluate(() => chrome.tabs.query({}))).find(
@@ -25,7 +28,8 @@ test('internal console export reads a single workspace without changing data and
       .waitFor();
     const frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     await rpc(frame, 'files.write', '/workspace/other.js', 'OTHER_WORKSPACE_PRIVATE_DATA');
-    const current = await rpc(frame, 'workspace.new');
+    await context.pages()[0].goto('https://example.org/');
+    const current = await rpc(frame, 'snapshot');
     await rpc(frame, 'settings.save', {
       provider: 'openai-compatible',
       baseURL: 'https://model.example/v1',
@@ -42,58 +46,64 @@ test('internal console export reads a single workspace without changing data and
       'return { headers: { Authorization: "Bearer HEADER_SECRET", Cookie: "COOKIE_SECRET" }, url: "https://example.com/?access_token=QUERY_SECRET", embedded: JSON.stringify({password:"EMBEDDED_SECRET"}) };',
     );
     await rpc(frame, 'repl.run', 'throw new Error("observed harness failure");');
-    await worker.evaluate(async (workspaceId) => {
-      const request = indexedDB.open('monkeyagent-devtools-v1');
-      const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const tx = db.transaction(['conversations', 'runs', 'artifacts'], 'readwrite');
-      tx.objectStore('conversations').put({
-        id: workspaceId,
-        messages: [
-          {
-            id: 'request',
-            role: 'user',
-            parts: [{ type: 'text', text: 'Analyze the observed harness failure.' }],
-          },
-        ],
-      });
-      tx.objectStore('runs').put({
-        id: 'run',
-        workspaceId,
-        startedAt: 1,
-        endedAt: 2,
-        status: 'failed',
-        queued: [],
-      });
-      tx.objectStore('artifacts').put({
-        id: 'text',
-        workspaceId,
-        path: '/artifacts/result.json',
-        mimeType: 'application/json',
-        size: 31,
-        createdAt: 1,
-        blob: new Blob(['{"api_key":"ARTIFACT_SECRET"}'], { type: 'application/json' }),
-      });
-      tx.objectStore('artifacts').put({
-        id: 'image',
-        workspaceId,
-        path: '/artifacts/screenshot.png',
-        mimeType: 'image/png',
-        size: 10,
-        createdAt: 2,
-        blob: new Blob(['IMAGE_DATA'], { type: 'image/png' }),
-      });
-      await new Promise<void>((resolve, reject) => {
-        tx.oncomplete = () => resolve();
-        tx.onabort = () => reject(tx.error);
-      });
-      db.close();
-      (globalThis as any).copy = (text: string) => {
-        (globalThis as any).__exportedTrace = text;
-      };
-    }, current.workspace.id);
+    await worker.evaluate(
+      async ({ workspaceId, sessionId }) => {
+        const request = indexedDB.open('monkeyagent-devtools-v1');
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const tx = db.transaction(['conversations', 'runs', 'artifacts'], 'readwrite');
+        tx.objectStore('conversations').put({
+          id: sessionId,
+          messages: [
+            {
+              id: 'request',
+              role: 'user',
+              parts: [{ type: 'text', text: 'Analyze the observed harness failure.' }],
+            },
+          ],
+        });
+        tx.objectStore('runs').put({
+          id: 'run',
+          workspaceId,
+          sessionId,
+          startedAt: 1,
+          endedAt: 2,
+          status: 'failed',
+          queued: [],
+        });
+        tx.objectStore('artifacts').put({
+          id: 'text',
+          workspaceId,
+          sessionId,
+          path: '/artifacts/result.json',
+          mimeType: 'application/json',
+          size: 31,
+          createdAt: 1,
+          blob: new Blob(['{"api_key":"ARTIFACT_SECRET"}'], { type: 'application/json' }),
+        });
+        tx.objectStore('artifacts').put({
+          id: 'image',
+          workspaceId,
+          sessionId,
+          path: '/artifacts/screenshot.png',
+          mimeType: 'image/png',
+          size: 10,
+          createdAt: 2,
+          blob: new Blob(['IMAGE_DATA'], { type: 'image/png' }),
+        });
+        await new Promise<void>((resolve, reject) => {
+          tx.oncomplete = () => resolve();
+          tx.onabort = () => reject(tx.error);
+        });
+        db.close();
+        (globalThis as any).copy = (text: string) => {
+          (globalThis as any).__exportedTrace = text;
+        };
+      },
+      { workspaceId: current.workspace.id, sessionId: current.session.id },
+    );
     const source = await readFile(
       new URL('../../scripts/export-debug-data.js', import.meta.url),
       'utf8',
@@ -103,6 +113,7 @@ test('internal console export reads a single workspace without changing data and
     const trace = JSON.parse(json);
     expect(trace.format).toBe('monkeyagent-debug');
     expect(trace.workspace.id).toBe(current.workspace.id);
+    expect(trace.session.id).toBe(current.session.id);
     expect(trace.conversation.messages[0].parts[0].text).toContain('observed harness failure');
     expect(trace.runs).toHaveLength(1);
     expect(

@@ -37,6 +37,7 @@ function readManifest() {
       !isProd && 'declarativeNetRequestFeedback',
       'identity',
       'offscreen',
+      'publicSuffix',
       'userScripts',
       'webNavigation',
     ].filter(Boolean)),

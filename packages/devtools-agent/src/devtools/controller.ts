@@ -14,7 +14,9 @@ import { validateHostCall } from '../repl/contracts';
 import { ScriptService, installedSummary } from '../scripts/service';
 import { openAgentDB, type AgentDB } from '../workspace/database';
 import { WorkspaceService, fileSummary } from '../workspace/service';
-import { acquireWorkspaceLease } from '../workspace/lease';
+import { acquireSessionLease } from '../workspace/lease';
+import { SessionService } from '../workspace/session';
+import { siteWorkspaceId } from '../workspace/site';
 import { createModel, loadSettings, saveSettings, checkConnection } from '../model/settings';
 import { ACTIVE_TOOLS, createTools, findArtifacts } from '../agent/tools';
 import { FileTools } from '../agent/file-tools';
@@ -36,6 +38,7 @@ const ACTIVE = new Set(['generating', 'executing', 'stopping']);
 export class Controller {
   private db!: AgentDB;
   workspace!: WorkspaceService;
+  session!: SessionService;
   browser!: BrowserSession;
   private scripts!: ScriptService;
   private fileTools!: FileTools;
@@ -43,7 +46,7 @@ export class Controller {
   private queue = new SerialQueue();
   private messages: UIMessage[] = [];
   private conversationId!: string;
-  private clearing?: Promise<Snapshot>;
+  private clearing?: Promise<void>;
   private run?: RunRecord;
   private abort?: AbortController;
   private toolsAbort = new AbortController();
@@ -54,7 +57,13 @@ export class Controller {
   private timer?: ReturnType<typeof setTimeout>;
   private streamTask?: Promise<void>;
   private error?: string;
-  private releaseWorkspace?: () => void;
+  private releaseSession?: () => void;
+  private siteChanges: Promise<void> = Promise.resolve();
+  private updates?: BroadcastChannel;
+  private disposed = false;
+  private onTabUpdated = (id: number, change: chrome.tabs.OnUpdatedInfo) => {
+    if (id === this.tabId && change.url) void this.syncTarget(change.url).catch(() => {});
+  };
   private consumed: UIMessage[] = [];
   constructor(
     public tabId: number,
@@ -64,34 +73,85 @@ export class Controller {
   ) {}
   async init() {
     this.db = await openAgentDB();
-    const workspaces = (await this.db.getAll('workspaces')).sort(
-      (a, b) => b.updatedAt - a.updatedAt,
-    );
-    const latest = workspaces.find((workspace) => workspace.targetTabId === this.tabId);
-    this.workspace = latest
-      ? new WorkspaceService(this.db, latest.id)
-      : await WorkspaceService.create(this.db, this.targetUrl, this.tabId);
-    try {
-      this.releaseWorkspace = await acquireWorkspaceLease(this.workspace.id);
-    } catch {
-      this.workspace = await WorkspaceService.create(this.db, this.targetUrl, this.tabId);
-      this.releaseWorkspace = await acquireWorkspaceLease(this.workspace.id);
-    }
-    await this.workspace.patchMetadata({ targetUrl: this.targetUrl });
-    // Never resume an interrupted action. Reconcile its outcome explicitly in a new task.
-    for (const run of await this.db.getAllFromIndex('runs', 'workspaceId', this.workspace.id))
-      if (ACTIVE.has(run.status))
-        await this.db.put('runs', { ...run, status: 'interrupted', endedAt: Date.now() });
-    for (const operation of await this.db.getAllFromIndex(
-      'operations',
-      'workspaceId',
-      this.workspace.id,
-    ))
-      if (operation.status === 'started')
-        await this.db.put('operations', { ...operation, status: 'unknown' });
+    this.workspace = await WorkspaceService.create(this.db, this.targetUrl || 'about:blank');
+    await this.restoreSession();
     this.browser = this.createBrowser();
-    await this.loadWorkspace();
+    await this.loadSession();
+    this.updates = new BroadcastChannel('monkeyagent:workspace-changes');
+    this.updates.onmessage = ({ data }) => {
+      if (data === this.workspace.id) this.publish();
+    };
+    chrome.tabs.onUpdated?.addListener(this.onTabUpdated);
     return this;
+  }
+  private async restoreSession() {
+    const latest = (await SessionService.list(this.db, this.workspace.id)).find(
+      (session) => session.targetTabId === this.tabId,
+    );
+    this.session = latest
+      ? new SessionService(this.db, latest.id)
+      : await SessionService.create(this.db, this.workspace.id, this.targetUrl, this.tabId);
+    try {
+      this.releaseSession = await acquireSessionLease(this.session.id);
+    } catch (error) {
+      if (!(error instanceof AgentError) || error.code !== 'session_busy') throw error;
+      this.session = await SessionService.create(
+        this.db,
+        this.workspace.id,
+        this.targetUrl,
+        this.tabId,
+      );
+      this.releaseSession = await acquireSessionLease(this.session.id);
+    }
+    await this.session.patch({ targetUrl: this.targetUrl, targetTabId: this.tabId });
+  }
+  private syncTarget(url: string): Promise<void> {
+    const change = this.siteChanges.then(async () => {
+      if (url === this.targetUrl || this.disposed) return;
+      await this.clearing;
+      if (siteWorkspaceId(url) === this.workspace.id) {
+        this.targetUrl = url;
+        await this.session.patch({ targetUrl: url });
+      } else {
+        this.stop();
+        await this.streamTask;
+        await this.queue.onIdle();
+        this.workspace.changed = () => {};
+        await this.browser.dispose();
+        this.releaseSession?.();
+        this.targetUrl = url;
+        this.workspace = await WorkspaceService.create(this.db, url);
+        await this.restoreSession();
+        this.browser = this.createBrowser();
+        await this.loadSession();
+        this.error = undefined;
+      }
+      this.notifyWorkspace();
+    });
+    this.siteChanges = change.catch((error) => {
+      this.error = errorData(error).message;
+      this.publish();
+    });
+    return change;
+  }
+  private notifyWorkspace() {
+    this.updates?.postMessage(this.workspace.id);
+    this.publish();
+  }
+  async dispose() {
+    this.disposed = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    chrome.tabs.onUpdated?.removeListener(this.onTabUpdated);
+    this.updates?.close();
+    this.updates = undefined;
+    this.stop();
+    await this.streamTask;
+    await this.queue.onIdle();
+    await this.siteChanges;
+    await this.browser.dispose();
+    this.releaseSession?.();
+    this.db.close();
   }
   private createBrowser() {
     return new BrowserSession(
@@ -105,27 +165,38 @@ export class Controller {
       },
       this.beforeAttach,
       (url) => {
-        this.targetUrl = url;
-        void this.workspace.patchMetadata({ targetUrl: url }).catch((error) => {
-          this.error = errorData(error).message;
-          this.publish();
-        });
+        void this.syncTarget(url).catch(() => {});
       },
     );
   }
-  private async loadWorkspace() {
-    this.workspace.changed = () => this.publish();
+  private async loadSession() {
+    this.workspace.sessionId = this.session.id;
+    const workspaceId = this.workspace.id;
+    this.workspace.changed = () => {
+      this.updates?.postMessage(workspaceId);
+      if (workspaceId === this.workspace.id) this.publish();
+    };
+    for (const run of await this.db.getAllFromIndex('runs', 'sessionId', this.session.id))
+      if (ACTIVE.has(run.status))
+        await this.db.put('runs', { ...run, status: 'interrupted', endedAt: Date.now() });
+    for (const operation of await this.db.getAllFromIndex(
+      'operations',
+      'sessionId',
+      this.session.id,
+    ))
+      if (operation.status === 'started')
+        await this.db.put('operations', { ...operation, status: 'unknown' });
     this.scripts = new ScriptService(this.workspace, this.adapter);
     this.fileTools = new FileTools(this.workspace);
     this.repl?.stop();
     this.repl = new ReplClient((method, args) => this.hostCall(method, args));
-    const storedMessages = (await this.db.get('conversations', this.workspace.id))?.messages ?? [];
+    const storedMessages = (await this.db.get('conversations', this.session.id))?.messages ?? [];
     this.messages = normalizeMessageIds(storedMessages);
     if (this.messages.some((message, index) => message !== storedMessages[index]))
       await this.persistMessages();
-    this.conversationId = (await this.workspace.metadata()).conversationId ?? this.workspace.id;
-    this.run = (await this.db.getAllFromIndex('runs', 'workspaceId', this.workspace.id))
-      .filter((run) => (run.conversationId ?? run.workspaceId) === this.conversationId)
+    this.conversationId = (await this.session.metadata()).conversationId ?? this.session.id;
+    this.run = (await this.db.getAllFromIndex('runs', 'sessionId', this.session.id))
+      .filter((run) => (run.conversationId ?? run.sessionId) === this.conversationId)
       .sort((a, b) => b.startedAt - a.startedAt)[0];
   }
   attach(port: MessagePort) {
@@ -152,20 +223,34 @@ export class Controller {
     this.publish();
   }
   async snapshot(): Promise<Snapshot> {
-    return {
-      workspace: await this.workspace.metadata(),
-      files: await this.workspace.allFiles(),
-      messages: this.messages,
-      run: this.run,
-      connected: this.browser.connected,
-      events: this.browser.recentEvents(),
-      history: (await this.db.getAll('workspaces')).sort((a, b) => b.updatedAt - a.updatedAt),
-      operations: (await this.db.getAllFromIndex('operations', 'workspaceId', this.workspace.id))
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .slice(0, 100),
-      error: this.error,
-    };
+    for (;;) {
+      await this.siteChanges;
+      const workspace = this.workspace;
+      const session = this.session;
+      const [metadata, current, files, history, operations] = await Promise.all([
+        workspace.metadata(),
+        session.metadata(),
+        workspace.allFiles(),
+        SessionService.list(this.db, workspace.id),
+        this.db.getAllFromIndex('operations', 'sessionId', session.id),
+      ]);
+      // Navigation or a session switch may have happened while reading IndexedDB.
+      if (workspace !== this.workspace || session !== this.session) continue;
+      return {
+        workspace: metadata,
+        session: current,
+        files,
+        messages: this.messages,
+        run: this.run,
+        connected: this.browser.connected,
+        events: this.browser.recentEvents(),
+        history,
+        operations: operations.sort((a, b) => b.startedAt - a.startedAt).slice(0, 100),
+        error: this.error,
+      };
+    }
   }
+
   private emit(event: PortEvent) {
     for (const port of this.ports)
       try {
@@ -175,7 +260,7 @@ export class Controller {
       }
   }
   private publish() {
-    if (this.timer) return;
+    if (this.disposed || this.timer) return;
     this.timer = setTimeout(async () => {
       this.timer = undefined;
       try {
@@ -186,6 +271,23 @@ export class Controller {
     }, 100);
   }
   async dispatch(method: string, args: unknown[]): Promise<unknown> {
+    const requestSignal = this.toolsAbort.signal;
+    if (method !== 'stop') {
+      await this.siteChanges;
+      const target = await chrome.tabs.get(this.tabId);
+      if (target.url) await this.syncTarget(target.url);
+    }
+    if (
+      [
+        'chat.start',
+        'repl.run',
+        'scripts.import',
+        'scripts.apply',
+        'scripts.setEnabled',
+        'browser.connect',
+      ].includes(method)
+    )
+      requestSignal.throwIfAborted();
     if (
       this.clearing &&
       [
@@ -193,6 +295,8 @@ export class Controller {
         'chat.resume',
         'chat.queue',
         'workspace.new',
+        'session.new',
+        'session.open',
         'workspace.open',
         'repl.run',
         'scripts.import',
@@ -239,10 +343,12 @@ export class Controller {
           this.emit({ type: 'event', event: 'chunk', streamId, data: chunk });
         return { streamId };
       }
-      case 'chat.clear':
-        return (this.clearing ??= this.clearConversation().finally(() => {
+      case 'chat.clear': {
+        await (this.clearing ??= this.clearConversation().finally(() => {
           this.clearing = undefined;
         }));
+        return this.snapshot();
+      }
       case 'chat.queue': {
         if (!this.streamTask || !this.run || !this.abort || this.abort.signal.aborted)
           throw new AgentError('not_running', 'No running task to steer.');
@@ -277,8 +383,9 @@ export class Controller {
         return this.workspace.read(args[0] as string);
       case 'files.baseline': {
         const [path, mode] = args as [string, string];
-        const meta = await this.workspace.metadata();
-        if (mode === 'installed') return meta.bindings[path]?.installedCode ?? '';
+        if (mode === 'installed')
+          return (await this.workspace.metadata()).bindings[path]?.installedCode ?? '';
+        const meta = await this.session.metadata();
         return meta.baseline[path]
           ? ((await this.workspace.revision(meta.baseline[path]))?.content ?? '')
           : '';
@@ -295,10 +402,12 @@ export class Controller {
         return this.execute(method, args, () =>
           this.scripts.setEnabled(...(args as [string, boolean])),
         );
+      case 'session.new':
       case 'workspace.new':
-        return this.switchWorkspace();
+        return this.switchSession();
+      case 'session.open':
       case 'workspace.open':
-        return this.switchWorkspace(args[0] as string);
+        return this.switchSession(args[0] as string);
       case 'artifact.get': {
         const ref = await this.db.get('artifacts', args[0] as string);
         if (ref?.workspaceId !== this.workspace.id)
@@ -313,29 +422,38 @@ export class Controller {
         throw new AgentError('unknown_method', `Unknown controller method: ${method}`);
     }
   }
-  private async switchWorkspace(id?: string) {
-    if (this.streamTask || this.queue.size)
-      throw new AgentError(
-        'busy',
-        'Stop the current task and wait for tools to finish before switching sessions.',
-      );
-    if (id === this.workspace.id) return this.snapshot();
-    const next = id
-      ? new WorkspaceService(this.db, id)
-      : await WorkspaceService.create(this.db, this.targetUrl, this.tabId);
-    await next.metadata();
-    const release = await acquireWorkspaceLease(next.id);
-    await next.patchMetadata({ targetUrl: this.targetUrl });
-    this.repl.stop();
-    this.workspace = next;
-    this.releaseWorkspace?.();
-    this.releaseWorkspace = release;
-    // A fresh BrowserSession changes the artifact destination and clears context handles/state.
-    await this.browser.dispose();
-    this.browser = this.createBrowser();
-    await this.loadWorkspace();
-    this.error = undefined;
-    this.publish();
+  private async switchSession(id?: string) {
+    const change = this.siteChanges.then(async () => {
+      if (this.streamTask || this.queue.size)
+        throw new AgentError(
+          'busy',
+          'Stop the current task and wait for tools to finish before switching sessions.',
+        );
+      if (id === this.session.id) return;
+      const next = id
+        ? new SessionService(this.db, id)
+        : await SessionService.create(this.db, this.workspace.id, this.targetUrl, this.tabId);
+      if ((await next.metadata()).workspaceId !== this.workspace.id)
+        throw new AgentError('site_scope', 'Session belongs to a different site.');
+      const release = await acquireSessionLease(next.id);
+      try {
+        await next.patch({ targetUrl: this.targetUrl, targetTabId: this.tabId });
+      } catch (error) {
+        release();
+        throw error;
+      }
+      this.repl.stop();
+      this.session = next;
+      this.releaseSession?.();
+      this.releaseSession = release;
+      await this.browser.dispose();
+      this.browser = this.createBrowser();
+      await this.loadSession();
+      this.error = undefined;
+      this.notifyWorkspace();
+    });
+    this.siteChanges = change.catch(() => {});
+    await change;
     return this.snapshot();
   }
   private async clearConversation() {
@@ -345,16 +463,16 @@ export class Controller {
     await this.streamTask;
     await this.queue.onIdle();
     const conversationId = crypto.randomUUID();
-    const tx = this.db.transaction(['workspaces', 'conversations', 'runs'], 'readwrite');
-    const workspace = await tx.objectStore('workspaces').get(this.workspace.id);
-    if (!workspace) throw new AgentError('not_found', 'Workspace not found.');
-    await tx.objectStore('workspaces').put({
-      ...workspace,
+    const tx = this.db.transaction(['sessions', 'conversations', 'runs'], 'readwrite');
+    const session = await tx.objectStore('sessions').get(this.session.id);
+    if (!session) throw new AgentError('not_found', 'Session not found.');
+    await tx.objectStore('sessions').put({
+      ...session,
       conversationId,
       title: '新会话',
       updatedAt: Date.now(),
     });
-    await tx.objectStore('conversations').put({ id: this.workspace.id, messages: [] });
+    await tx.objectStore('conversations').put({ id: this.session.id, messages: [] });
     if (this.run) await tx.objectStore('runs').put({ ...this.run, queued: [] });
     await tx.done;
     this.conversationId = conversationId;
@@ -365,8 +483,7 @@ export class Controller {
     this.chunks = [];
     this.activeStream = undefined;
     this.error = undefined;
-    this.publish();
-    return this.snapshot();
+    this.notifyWorkspace();
   }
   private async start(messages: UIMessage[]) {
     messages = normalizeMessageIds(messages);
@@ -377,6 +494,7 @@ export class Controller {
     this.run = {
       id: crypto.randomUUID(),
       workspaceId: this.workspace.id,
+      sessionId: this.session.id,
       conversationId: this.conversationId,
       startedAt: Date.now(),
       status: 'generating',
@@ -385,7 +503,7 @@ export class Controller {
     };
     let failed = false;
     try {
-      await this.workspace.captureBaseline();
+      await this.session.captureBaseline(await this.workspace.allFiles());
       await this.persistMessages();
       await this.saveRun();
       const lastText =
@@ -395,7 +513,7 @@ export class Controller {
           .map((p) => p.text)
           .join(' ') ?? '';
       if (messages.filter((m) => m.role === 'user').length === 1)
-        await this.workspace.patchMetadata({ title: lastText.slice(0, 60) || '新会话' });
+        await this.session.patch({ title: lastText.slice(0, 60) || '新会话' });
       const settings = await loadSettings();
       this.run.model = {
         provider: settings.provider,
@@ -404,8 +522,15 @@ export class Controller {
         supportsImages: settings.supportsImages,
       };
       const target = await chrome.tabs.get(this.tabId);
-      this.targetUrl = target.url ?? this.targetUrl;
-      await this.workspace.patchMetadata({ targetUrl: this.targetUrl });
+      const targetUrl = target.url ?? this.targetUrl;
+      if (siteWorkspaceId(targetUrl) !== this.workspace.id)
+        throw new AgentError(
+          'site_changed',
+          'The inspected tab changed site. Send from its current session.',
+        );
+      this.targetUrl = targetUrl;
+      await this.session.patch({ targetUrl: this.targetUrl });
+      this.notifyWorkspace();
       const tools = createTools({
         workspace: this.workspace,
         fileTools: this.fileTools,
@@ -423,7 +548,7 @@ export class Controller {
         stopWhen: isStepCount(30),
         toolCallConcurrency: 1,
         maxRetries: 1,
-        instructions: `${INSTRUCTIONS}\nImage input: ${settings.supportsImages ? 'enabled' : 'disabled; screenshots can be saved but you cannot inspect pixels'}\nBound inspected tab: ${this.tabId}\nTarget URL: ${this.targetUrl}\nWorkspace directory: ${JSON.stringify(directory)}\nInterrupted operations: ${JSON.stringify((await this.db.getAllFromIndex('operations', 'workspaceId', this.workspace.id)).filter((op) => op.status === 'unknown').map(({ id, name }) => ({ id, name })))}`,
+        instructions: `${INSTRUCTIONS}\nImage input: ${settings.supportsImages ? 'enabled' : 'disabled; screenshots can be saved but you cannot inspect pixels'}\nBound inspected tab: ${this.tabId}\nTarget URL: ${this.targetUrl}\nWorkspace directory: ${JSON.stringify(directory)}\nInterrupted operations: ${JSON.stringify((await this.db.getAllFromIndex('operations', 'sessionId', this.session.id)).filter((op) => op.status === 'unknown').map(({ id, name }) => ({ id, name })))}`,
         prepareStep: async ({ messages: stepMessages }) => {
           this.run!.status = 'generating';
           const queued = this.run!.queued.splice(0);
@@ -566,6 +691,7 @@ export class Controller {
       const operation: OperationRecord = {
         id: crypto.randomUUID(),
         workspaceId: this.workspace.id,
+        sessionId: this.session.id,
         runId: this.abort ? this.run?.id : undefined,
         name,
         input,
@@ -694,7 +820,7 @@ export class Controller {
     }
   }
   private async persistMessages() {
-    await this.db.put('conversations', { id: this.workspace.id, messages: this.messages });
+    await this.db.put('conversations', { id: this.session.id, messages: this.messages });
   }
   private async saveRun() {
     if (this.run) await this.db.put('runs', this.run);

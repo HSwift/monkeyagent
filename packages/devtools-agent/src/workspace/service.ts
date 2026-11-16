@@ -2,6 +2,7 @@ import type { AgentDB } from './database';
 import { API_DOCS } from './docs';
 import { AgentError } from '../protocol/errors';
 import type { ArtifactRef, FileRecord, ScriptBinding, WorkspaceRecord } from '../protocol/types';
+import { siteKey, siteWorkspaceId } from './site';
 
 /** Mutations acknowledge a revision; use read() when the full source is actually needed. */
 export function fileSummary(file: FileRecord) {
@@ -41,36 +42,20 @@ export class WorkspaceService {
     public db: AgentDB,
     public id: string,
     public changed: () => void = () => {},
+    public sessionId?: string,
   ) {}
-  static async create(
-    db: AgentDB,
-    targetUrl: string,
-    targetTabId?: number,
-  ): Promise<WorkspaceService> {
-    const id = crypto.randomUUID();
-    await db.put('workspaces', {
-      id,
-      title: '新会话',
-      targetUrl,
-      targetTabId,
-      updatedAt: Date.now(),
-      bindings: {},
-      baseline: {},
-    });
+  static async create(db: AgentDB, targetUrl: string): Promise<WorkspaceService> {
+    const id = siteWorkspaceId(targetUrl);
+    const tx = db.transaction('workspaces', 'readwrite');
+    if (!(await tx.store.get(id)))
+      await tx.store.put({ id, site: siteKey(targetUrl), updatedAt: Date.now(), bindings: {} });
+    await tx.done;
     return new WorkspaceService(db, id);
   }
   async metadata(): Promise<WorkspaceRecord> {
     const result = await this.db.get('workspaces', this.id);
     if (!result) throw new AgentError('not_found', 'Workspace not found.');
     return result;
-  }
-  async patchMetadata(patch: Partial<Pick<WorkspaceRecord, 'title' | 'targetUrl' | 'baseline'>>) {
-    const tx = this.db.transaction('workspaces', 'readwrite');
-    const data = await tx.store.get(this.id);
-    if (!data) throw new AgentError('not_found', 'Workspace not found.');
-    await tx.store.put({ ...data, ...patch, updatedAt: Date.now() });
-    await tx.done;
-    this.changed();
   }
   async bind(path: string, binding: ScriptBinding) {
     const tx = this.db.transaction('workspaces', 'readwrite');
@@ -252,11 +237,6 @@ export class WorkspaceService {
     }
     return results;
   }
-  async captureBaseline() {
-    await this.patchMetadata({
-      baseline: Object.fromEntries((await this.allFiles()).map((f) => [f.path, f.revision])),
-    });
-  }
   async revision(revision: string): Promise<FileRecord | undefined> {
     const file = await this.db.get('revisions', revision);
     if (file?.workspaceId !== this.id) return;
@@ -265,7 +245,13 @@ export class WorkspaceService {
   async artifact(blob: Blob, name = 'artifact'): Promise<ArtifactRef> {
     const id = crypto.randomUUID();
     const ref = { id, path: `/artifacts/${name}-${id}`, mimeType: blob.type, size: blob.size };
-    await this.db.put('artifacts', { ...ref, workspaceId: this.id, blob, createdAt: Date.now() });
+    await this.db.put('artifacts', {
+      ...ref,
+      workspaceId: this.id,
+      sessionId: this.sessionId,
+      blob,
+      createdAt: Date.now(),
+    });
     this.changed();
     return ref;
   }

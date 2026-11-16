@@ -74,7 +74,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
     await panel.getByRole('button', { name: '发送消息', exact: true }).click();
     await expect(panel.getByText('任务完成', { exact: true })).toBeVisible();
     const before = await rpc(frame, 'snapshot');
-    const oldConversationId = before.workspace.conversationId ?? before.workspace.id;
+    const oldConversationId = before.session.conversationId ?? before.session.id;
 
     // Cancelling the dialog must preserve the conversation.
     await panel.getByRole('button', { name: '更多操作', exact: true }).click();
@@ -87,7 +87,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
     await expect(panel.getByRole('heading', { name: '有什么可以帮你？' })).toBeVisible();
     const cleared = await rpc(frame, 'snapshot');
     expect(cleared.workspace.id).toBe(before.workspace.id);
-    expect(cleared.workspace.conversationId).not.toBe(oldConversationId);
+    expect(cleared.session.conversationId).not.toBe(oldConversationId);
     expect(cleared.workspace.bindings).toEqual(before.workspace.bindings);
     expect(cleared.files).toEqual(before.files);
     expect(cleared.messages).toEqual([]);
@@ -106,7 +106,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
     const restored = await rpc(frame, 'snapshot');
     expect(restored.messages).toEqual([]);
     expect(restored.run).toBeUndefined();
-    expect(restored.workspace.conversationId).toBe(cleared.workspace.conversationId);
+    expect(restored.session.conversationId).toBe(cleared.session.conversationId);
     expect((await rpc(frame, 'files.read', file.path)).revision).toBe(file.revision);
     await input.fill('新的独立要求');
     await panel.getByRole('button', { name: '发送消息', exact: true }).click();

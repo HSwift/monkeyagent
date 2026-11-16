@@ -11,7 +11,7 @@ await writeFile(
       version: '0.1.0',
       minimum_chrome_version: '135',
       devtools_page: 'agent/devtools.html',
-      permissions: ['debugger', 'storage', 'tabs'],
+      permissions: ['debugger', 'publicSuffix', 'storage', 'tabs'],
       host_permissions: ['<all_urls>'],
       background: { service_worker: 'agent/fixture.js', type: 'module' },
       content_security_policy: {

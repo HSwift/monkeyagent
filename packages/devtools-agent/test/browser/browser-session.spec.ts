@@ -190,7 +190,7 @@ test('browser contexts, navigation invalidation, screenshots and explicit reconn
       `return await browser.send('Page.navigate', {url:${JSON.stringify(`http://127.0.0.1:${port}/navigated`)}});`,
     );
     await expect
-      .poll(async () => (await rpc(frame, 'snapshot')).workspace.targetUrl)
+      .poll(async () => (await rpc(frame, 'snapshot')).session.targetUrl)
       .toBe(`http://127.0.0.1:${port}/navigated`);
     const sameDocument = await run(
       `return await browser.navigate(${JSON.stringify(`http://127.0.0.1:${port}/navigated#fragment`)});`,
@@ -198,7 +198,7 @@ test('browser contexts, navigation invalidation, screenshots and explicit reconn
     expect(sameDocument.success).toBe(true);
     expect(sameDocument.value.method).toBe('Page.navigatedWithinDocument');
     await expect
-      .poll(async () => (await rpc(frame, 'snapshot')).workspace.targetUrl)
+      .poll(async () => (await rpc(frame, 'snapshot')).session.targetUrl)
       .toBe(`http://127.0.0.1:${port}/navigated#fragment`);
   } finally {
     await context.close();
