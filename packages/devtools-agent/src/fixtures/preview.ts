@@ -15,7 +15,7 @@ export async function startPreview(client: ControllerClient) {
   const unavailable = (_source: unknown, _version: unknown, callback: () => void) => {
     runtime.lastError = {
       message:
-        '普通网页预览不连接浏览器调试。请加载 fixtures/extension 或 Monkey MV3 构建，并打开目标网页的 F12。',
+        'Browser debugging is unavailable in the web preview. Load fixtures/extension or the Monkey MV3 build, then open DevTools on the target page.',
     };
     callback();
     delete runtime.lastError;

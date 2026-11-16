@@ -3,6 +3,18 @@ import type { FileRecord, SessionRecord } from '../protocol/types';
 import { AgentError } from '../protocol/errors';
 import { siteWorkspaceId } from './site';
 
+export const DEFAULT_SESSION_TITLE = 'New session';
+
+async function withEnglishDefaultTitle(db: AgentDB, session: SessionRecord) {
+  // Translate only the old generated title. A user's message may have the same text.
+  if (session.title === '\u65b0\u4f1a\u8bdd') {
+    const conversation = await db.get('conversations', session.id);
+    if (!conversation?.messages.some((message) => message.role === 'user'))
+      return { ...session, title: DEFAULT_SESSION_TITLE };
+  }
+  return session;
+}
+
 export class SessionService {
   constructor(
     public db: AgentDB,
@@ -18,7 +30,7 @@ export class SessionService {
       workspaceId,
       targetUrl,
       targetTabId,
-      title: '新会话',
+      title: DEFAULT_SESSION_TITLE,
       updatedAt: Date.now(),
       baseline: {},
     });
@@ -26,15 +38,18 @@ export class SessionService {
   }
 
   static async list(db: AgentDB, workspaceId: string) {
-    return (await db.getAllFromIndex('sessions', 'workspaceId', workspaceId)).sort(
-      (a, b) => b.updatedAt - a.updatedAt,
+    const sessions = await db.getAllFromIndex('sessions', 'workspaceId', workspaceId);
+    return Promise.all(
+      sessions
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((session) => withEnglishDefaultTitle(db, session)),
     );
   }
 
   async metadata(): Promise<SessionRecord> {
     const session = await this.db.get('sessions', this.id);
     if (!session) throw new AgentError('not_found', 'Session not found.');
-    return session;
+    return withEnglishDefaultTitle(this.db, session);
   }
 
   async patch(

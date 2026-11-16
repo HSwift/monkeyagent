@@ -12,7 +12,7 @@ _Screenshots show the actual Agent UI in an isolated test extension, using synth
 
 ## Features
 
-- **A conversation at the center.** Files, changes, and debugging tools open in separate drawers when you need them. Includes light and dark themes.
+- **A conversation at the center.** Files, changes, and debugging tools open in separate drawers when you need them. English interface with light and dark themes.
 - **Userscript editing and installation.** Create scripts or import existing ones, edit them in CodeMirror, review diffs, and install them into Monkey. Revision checks help prevent concurrent edits from overwriting each other.
 - **Debugging against the inspected tab.** Evaluate JavaScript, inspect DOM and browser events, read network responses, capture screenshots, and verify script behavior.
 - **Site workspaces with separate sessions.** Pages under the same registrable domain (eTLD+1) share files and session history. Each session keeps its own conversation, run records, and task baseline.

@@ -71,7 +71,7 @@ test('queued user input reaches the next model step once and stop aborts a strea
     const page = await context.newPage();
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     const panel = page.frameLocator('iframe');
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     let frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     await rpc(frame, 'settings.save', {
       provider: 'openai-compatible',
@@ -81,9 +81,9 @@ test('queued user input reaches the next model step once and stop aborts a strea
       supportsImages: false,
       theme: 'light',
     });
-    const input = panel.getByRole('textbox', { name: '发送给 Agent 的需求' });
+    const input = panel.getByRole('textbox', { name: 'Message Agent' });
     await input.fill('先等待网页事件，再完成任务');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect
       .poll(async () => {
         const value = await rpc(frame, 'snapshot');
@@ -93,10 +93,10 @@ test('queued user input reaches the next model step once and stop aborts a strea
       })
       .toBe(true);
     await input.fill('请补充一个清晰的验证结果');
-    await panel.getByRole('button', { name: '加入发送队列', exact: true }).click();
+    await panel.getByRole('button', { name: 'Queue message', exact: true }).click();
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.queued.length).toBe(1);
     await target.evaluate(() => console.log('release agent step'));
-    await expect(panel.getByText('任务完成', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Completed', { exact: true })).toBeVisible();
     expect(
       requests[1].messages.filter(
         (message: any) => message.role === 'user' && message.content === '请补充一个清晰的验证结果',
@@ -104,7 +104,7 @@ test('queued user input reaches the next model step once and stop aborts a strea
     ).toHaveLength(1);
     expect(JSON.stringify(requests)).not.toContain('secret-key');
     await page.reload();
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const restored = await rpc(frame, 'snapshot');
     expect(
@@ -115,10 +115,10 @@ test('queued user input reaches the next model step once and stop aborts a strea
       ),
     ).toHaveLength(1);
     await input.fill('开始第二轮长请求');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(panel.getByText('正在等待模型输出', { exact: true })).toBeVisible();
     await expect(
-      panel.getByRole('button', { name: '停止当前运行 (Ctrl/⌘ .)', exact: true }),
+      panel.getByRole('button', { name: 'Stop current run (Ctrl/⌘ .)', exact: true }),
     ).toBeVisible();
     await input.press('Control+.');
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.status).toBe('interrupted');

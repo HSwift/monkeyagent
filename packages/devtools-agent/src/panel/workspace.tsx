@@ -21,9 +21,9 @@ import { DebugPane } from './debug';
 type Attachment = { path: string; content: string; selection: string };
 export type WorkspaceView = 'files' | 'changes' | 'debug';
 const VIEW_LABELS: Record<WorkspaceView, string> = {
-  files: '文件',
-  changes: '变更',
-  debug: '调试',
+  files: 'Files',
+  changes: 'Changes',
+  debug: 'Debug',
 };
 const editorDrafts = new Map<string, { draft: string; base: FileRecord; conflict?: FileRecord }>();
 export function WorkspacePane({
@@ -130,10 +130,10 @@ export function WorkspacePane({
         <div className="toolbar-actions">
           {view === 'files' && (
             <>
-              <IconButton label="导入 Monkey 脚本" onClick={() => openDialog('import')}>
+              <IconButton label="Import Monkey script" onClick={() => openDialog('import')}>
                 <Download size={14} />
               </IconButton>
-              <IconButton label="新建文件" onClick={() => openDialog('new')}>
+              <IconButton label="New file" onClick={() => openDialog('new')}>
                 <Plus size={15} />
               </IconButton>
             </>
@@ -142,7 +142,7 @@ export function WorkspacePane({
             ref={closeButton}
             variant="ghost"
             className="icon-button"
-            aria-label="关闭抽屉"
+            aria-label="Close drawer"
             onClick={close}
           >
             <X size={16} />
@@ -153,7 +153,7 @@ export function WorkspacePane({
         <div className="file-layout">
           <aside
             className="file-tree"
-            aria-label="工作区文件"
+            aria-label="Workspace files"
             onKeyDown={(event) => {
               if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
               const files = [
@@ -176,7 +176,7 @@ export function WorkspacePane({
             }}
           >
             <div className="tree-header">
-              <span>工作区</span>
+              <span>Workspace</span>
             </div>
             <Scroller>
               {groups.map((group) => (
@@ -213,7 +213,7 @@ export function WorkspacePane({
                       ))}
                 </div>
               ))}
-              {!snapshot.files.length && <p className="tree-empty">还没有文件</p>}
+              {!snapshot.files.length && <p className="tree-empty">No files yet</p>}
             </Scroller>
           </aside>
           <div className="file-main">
@@ -221,10 +221,10 @@ export function WorkspacePane({
               <>
                 <div className="file-toolbar">
                   <span className="file-path">{file.path}</span>
-                  <IconButton label="重命名文件" onClick={() => openDialog('rename')}>
+                  <IconButton label="Rename file" onClick={() => openDialog('rename')}>
                     <Pencil size={13} />
                   </IconButton>
-                  <IconButton label="删除文件" onClick={() => openDialog('delete')}>
+                  <IconButton label="Delete file" onClick={() => openDialog('delete')}>
                     <Trash2 size={13} />
                   </IconButton>
                 </div>
@@ -241,16 +241,16 @@ export function WorkspacePane({
             ) : (
               <div className="empty-workspace">
                 <FileCode2 size={30} />
-                <h3>从一个脚本开始</h3>
-                <p>让 Agent 创建文件，或导入现有脚本继续修改。</p>
+                <h3>Start with a script</h3>
+                <p>Ask the Agent to create a file, or import an existing script to edit.</p>
                 <div className="inline-actions">
                   <Button onClick={() => openDialog('new')}>
                     <Plus size={14} />
-                    新建文件
+                    New file
                   </Button>
                   <Button onClick={() => openDialog('import')}>
                     <Download size={14} />
-                    导入脚本
+                    Import script
                   </Button>
                 </div>
               </div>
@@ -268,7 +268,7 @@ export function WorkspacePane({
             report={report}
           />
         ) : (
-          <div className="empty-workspace">选择一个文件查看变更</div>
+          <div className="empty-workspace">Select a file to view changes</div>
         )}
       </div>
       <div className="workspace-content" hidden={view !== 'debug'}>
@@ -281,12 +281,12 @@ export function WorkspacePane({
         }}
         title={
           dialog === 'new'
-            ? '新建工作区文件'
+            ? 'New workspace file'
             : dialog === 'rename'
-              ? '重命名文件'
+              ? 'Rename file'
               : dialog === 'delete'
-                ? '删除工作区文件'
-                : '导入 Monkey 脚本'
+                ? 'Delete workspace file'
+                : 'Import Monkey script'
         }
       >
         <form
@@ -298,21 +298,23 @@ export function WorkspacePane({
         >
           {dialog === 'import' && (
             <label>
-              已安装脚本
+              Installed scripts
               <select value={scriptId} onChange={(event) => setScriptId(event.target.value)}>
                 {scripts.map((script) => (
                   <option key={script.id} value={script.id}>
                     {script.name}
-                    {script.enabled ? '' : '（已停用）'}
+                    {script.enabled ? '' : ' (disabled)'}
                   </option>
                 ))}
               </select>
-              {!scripts.length && <span className="muted small">还没有可导入的脚本。</span>}
+              {!scripts.length && (
+                <span className="muted small">No scripts available to import.</span>
+              )}
             </label>
           )}
           {dialog !== 'delete' ? (
             <label>
-              文件路径
+              File path
               <input
                 autoFocus
                 value={path}
@@ -322,7 +324,7 @@ export function WorkspacePane({
               />
             </label>
           ) : (
-            <p>删除 {file?.path}。这只删除工作区文件；已安装的 Monkey 脚本仍然保留。</p>
+            <p>Delete {file?.path} from the workspace. The installed Monkey script will be kept.</p>
           )}
           {error && (
             <div className="error-banner" role="alert">
@@ -330,13 +332,13 @@ export function WorkspacePane({
             </div>
           )}
           <div className="form-actions">
-            <Button onClick={() => setDialog(null)}>取消</Button>
+            <Button onClick={() => setDialog(null)}>Cancel</Button>
             <Button
               type="submit"
               variant={dialog === 'delete' ? 'danger' : 'primary'}
               disabled={busy || (dialog === 'import' && !scriptId)}
             >
-              {busy ? '处理中…' : dialog === 'delete' ? '删除文件' : '确认'}
+              {busy ? 'Working…' : dialog === 'delete' ? 'Delete file' : 'Confirm'}
             </Button>
           </div>
         </form>
@@ -442,20 +444,20 @@ function FileEditor({
     // The refresh result is inspection only. A task-specific behavior assertion is still required.
   }
   const status = conflict
-    ? '版本冲突，草稿已保留'
+    ? 'Version conflict · Draft preserved'
     : saving
-      ? '正在保存…'
+      ? 'Saving…'
       : dirty
-        ? '有未保存修改'
+        ? 'Unsaved changes'
         : !binding
-          ? '已保存 · 尚未安装'
+          ? 'Saved · Not installed'
           : binding.fileRevision !== file.revision
-            ? '已保存 · 安装后有修改'
+            ? 'Saved · Modified since installation'
             : binding.verification
               ? binding.verification.passed
-                ? '验证通过'
-                : '验证失败'
-              : '已安装 · 待验证';
+                ? 'Verification passed'
+                : 'Verification failed'
+              : 'Installed · Not verified';
   return (
     <>
       <div className="editor-container">
@@ -463,7 +465,9 @@ function FileEditor({
       </div>
       {conflict && (
         <div className="conflict-box">
-          <strong>Agent 或另一处编辑更新了文件，当前草稿仍保留。</strong>
+          <strong>
+            The file was updated by the Agent or another editor. Your draft has been preserved.
+          </strong>
           <div className="inline-actions">
             <Button
               onClick={() => {
@@ -472,12 +476,12 @@ function FileEditor({
                 setConflict(undefined);
               }}
             >
-              使用工作区版本
+              Use workspace version
             </Button>
-            <Button onClick={() => void save(conflict.revision)}>用当前草稿覆盖新版本</Button>
+            <Button onClick={() => void save(conflict.revision)}>Overwrite with this draft</Button>
           </div>
           <details>
-            <summary>查看工作区的新内容</summary>
+            <summary>View the updated workspace content</summary>
             <pre>{conflict.content}</pre>
           </details>
         </div>
@@ -485,7 +489,9 @@ function FileEditor({
       <div className="file-status">
         <span className={`status-dot ${conflict ? 'warn' : ''}`} />
         <span>{status}</span>
-        {externalChanged && <span className="error-text">Monkey 中的脚本已被外部修改</span>}
+        {externalChanged && (
+          <span className="error-text">The script was changed outside the Agent in Monkey</span>
+        )}
       </div>
       <div className="file-actions">
         <Button
@@ -494,13 +500,13 @@ function FileEditor({
           disabled={dirty || saving || !!conflict || installing || externalChanged}
         >
           <Download size={13} />
-          {installing ? '安装中…' : '安装到 Monkey'}
+          {installing ? 'Installing…' : 'Install to Monkey'}
         </Button>
         <Button onClick={() => void verify().catch(report)} disabled={!binding}>
           <Play size={13} />
-          刷新并检查
+          Refresh and inspect
         </Button>
-        <Button onClick={showDiff}>查看差异</Button>
+        <Button onClick={showDiff}>View diff</Button>
         {binding && (
           <Button
             onClick={() =>
@@ -512,14 +518,14 @@ function FileEditor({
                 .catch(report)
             }
           >
-            {binding.enabled ? '停用' : '启用'}
+            {binding.enabled ? 'Disable' : 'Enable'}
           </Button>
         )}
         <Button
           variant="ghost"
           onClick={() => attach({ path: file.path, content: draft, selection })}
         >
-          附加{selection ? '选区' : '文件'}
+          Attach {selection ? 'selection' : 'file'}
         </Button>
       </div>
     </>
@@ -569,27 +575,30 @@ function Changes({
       <div className="file-toolbar">
         <span className="file-path">{file.path}</span>
         <select
-          aria-label="差异基线"
+          aria-label="Diff baseline"
           value={mode}
           onChange={(event) => setMode(event.target.value)}
         >
-          <option value="task">本轮任务开始时</option>
-          <option value="installed">最近安装版本</option>
+          <option value="task">Start of task</option>
+          <option value="installed">Last installed version</option>
         </select>
         <Button
           onClick={() => void restore().catch(report)}
           disabled={!loaded || before === file.content}
         >
           <RotateCcw size={12} />
-          恢复基线
+          Restore baseline
         </Button>
       </div>
       <div className="diff-labels">
-        <span>基线</span>
-        <span>当前工作区</span>
+        <span>Baseline</span>
+        <span>Current workspace</span>
       </div>
       <DiffEditor before={before} after={file.content} />
-      <p className="diff-note">恢复会创建新的文件修订。要更新网页运行的脚本，请再次安装并刷新。</p>
+      <p className="diff-note">
+        Restoring creates a new file revision. Install it and refresh the page to update the running
+        script.
+      </p>
     </div>
   );
 }

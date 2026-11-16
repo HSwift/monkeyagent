@@ -50,7 +50,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
     const page = await context.newPage();
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     const panel = page.frameLocator('iframe');
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     let frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const settings = {
       provider: 'openai-compatible',
@@ -69,22 +69,22 @@ test('clearing context persists, preserves the workspace and excludes old messag
     );
     await rpc(frame, 'scripts.apply', file.path);
     await rpc(frame, 'repl.run', 'state.oldContext = "must be reset";');
-    const input = panel.getByRole('textbox', { name: '发送给 Agent 的需求' });
+    const input = panel.getByRole('textbox', { name: 'Message Agent' });
     await input.fill('旧对话专用标记：old-context-token');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
-    await expect(panel.getByText('任务完成', { exact: true })).toBeVisible();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(panel.getByText('Completed', { exact: true })).toBeVisible();
     const before = await rpc(frame, 'snapshot');
     const oldConversationId = before.session.conversationId ?? before.session.id;
 
     // Cancelling the dialog must preserve the conversation.
-    await panel.getByRole('button', { name: '更多操作', exact: true }).click();
-    await panel.getByRole('menuitem', { name: '清空上下文', exact: true }).click();
-    await panel.getByRole('button', { name: '取消', exact: true }).click();
+    await panel.getByRole('button', { name: 'More actions', exact: true }).click();
+    await panel.getByRole('menuitem', { name: 'Clear context', exact: true }).click();
+    await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(panel.getByText('旧上下文的回复', { exact: true })).toBeVisible();
-    await panel.getByRole('button', { name: '更多操作', exact: true }).click();
-    await panel.getByRole('menuitem', { name: '清空上下文', exact: true }).click();
-    await panel.getByRole('button', { name: '清空', exact: true }).click();
-    await expect(panel.getByRole('heading', { name: '有什么可以帮你？' })).toBeVisible();
+    await panel.getByRole('button', { name: 'More actions', exact: true }).click();
+    await panel.getByRole('menuitem', { name: 'Clear context', exact: true }).click();
+    await panel.getByRole('button', { name: 'Clear', exact: true }).click();
+    await expect(panel.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
     const cleared = await rpc(frame, 'snapshot');
     expect(cleared.workspace.id).toBe(before.workspace.id);
     expect(cleared.session.conversationId).not.toBe(oldConversationId);
@@ -101,7 +101,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
     ).rejects.toThrow('context_changed');
 
     await page.reload();
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const restored = await rpc(frame, 'snapshot');
     expect(restored.messages).toEqual([]);
@@ -109,7 +109,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
     expect(restored.session.conversationId).toBe(cleared.session.conversationId);
     expect((await rpc(frame, 'files.read', file.path)).revision).toBe(file.revision);
     await input.fill('新的独立要求');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(panel.getByText('模型仍在输出', { exact: true })).toBeVisible();
     expect(requests[1].messages.filter((message: any) => message.role === 'user')).toEqual([
       { role: 'user', content: '新的独立要求' },
@@ -117,16 +117,16 @@ test('clearing context persists, preserves the workspace and excludes old messag
     expect(JSON.stringify(requests[1])).not.toContain('old-context-token');
     expect(JSON.stringify(requests[1])).not.toContain('旧上下文的回复');
     await input.fill('即将丢弃的补充要求');
-    await panel.getByRole('button', { name: '加入发送队列', exact: true }).click();
+    await panel.getByRole('button', { name: 'Queue message', exact: true }).click();
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.queued.length).toBe(1);
-    await panel.getByRole('button', { name: '更多操作', exact: true }).click();
-    await panel.getByRole('menuitem', { name: '清空上下文', exact: true }).click();
-    await panel.getByRole('button', { name: '停止并清空', exact: true }).click();
-    await expect(panel.getByRole('heading', { name: '有什么可以帮你？' })).toBeVisible();
+    await panel.getByRole('button', { name: 'More actions', exact: true }).click();
+    await panel.getByRole('menuitem', { name: 'Clear context', exact: true }).click();
+    await panel.getByRole('button', { name: 'Stop and clear', exact: true }).click();
+    await expect(panel.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
     await expect.poll(() => modelAborted).toBe(true);
     expect((await rpc(frame, 'snapshot')).run).toBeUndefined();
     await input.fill('清空后继续开发');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(panel.getByText('全新上下文的回复', { exact: true })).toBeVisible();
     expect(requests[2].messages.filter((message: any) => message.role === 'user')).toEqual([
       { role: 'user', content: '清空后继续开发' },

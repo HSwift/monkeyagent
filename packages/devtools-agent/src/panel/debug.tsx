@@ -50,7 +50,7 @@ export function DebugPane({
       <div className="debug-header">
         <span className={`connection-state ${snapshot.connected ? 'online' : ''}`}>
           <span className="status-dot" />
-          {snapshot.connected ? '调试已连接' : '调试未连接'}
+          {snapshot.connected ? 'Debugger connected' : 'Debugger disconnected'}
         </span>
         <Button
           onClick={() =>
@@ -60,7 +60,7 @@ export function DebugPane({
           }
         >
           {snapshot.connected ? <Unplug size={13} /> : <PlugZap size={13} />}
-          {snapshot.connected ? '断开' : '连接当前网页'}
+          {snapshot.connected ? 'Disconnect' : 'Connect to page'}
         </Button>
         <Button
           onClick={() => {
@@ -69,15 +69,19 @@ export function DebugPane({
           }}
         >
           <Camera size={13} />
-          截图
+          Capture screenshot
         </Button>
       </div>
       <div className="debug-tool-select">
-        <select aria-label="调试工具" value={tab} onChange={(event) => setTab(event.target.value)}>
+        <select
+          aria-label="Debug tool"
+          value={tab}
+          onChange={(event) => setTab(event.target.value)}
+        >
           <option value="repl">JavaScript REPL</option>
-          <option value="logs">日志</option>
-          <option value="network">网络</option>
-          <option value="screenshots">截图</option>
+          <option value="logs">Logs</option>
+          <option value="network">Network</option>
+          <option value="screenshots">Screenshots</option>
         </select>
       </div>
       <div className="debug-content" hidden={tab !== 'repl'}>
@@ -94,34 +98,35 @@ export function DebugPane({
         <div className="repl-toolbar">
           <span>JavaScript · await / return · Ctrl/⌘ Enter</span>
           <Button variant="primary" onClick={() => void run()} disabled={busy}>
-            {busy ? <LoaderCircle size={13} className="spin" /> : <Play size={13} />}执行
+            {busy ? <LoaderCircle size={13} className="spin" /> : <Play size={13} />}Run
           </Button>
-          {busy && <Button onClick={() => void client.call('stop').catch(report)}>停止</Button>}
+          {busy && <Button onClick={() => void client.call('stop').catch(report)}>Stop</Button>}
         </div>
         <Scroller className="repl-output">
           {result && (
             <div className={result.success ? '' : 'error-text'}>
               <p className="eyebrow">
-                {result.success ? '执行结果' : '执行失败'} · {Math.round(result.durationMs)} ms
+                {result.success ? 'Result' : 'Execution failed'} · {Math.round(result.durationMs)}{' '}
+                ms
               </p>
               <pre>{JSON.stringify(result.value ?? result.error, null, 2)}</pre>
             </div>
           )}
-          <p className="eyebrow">执行记录</p>
+          <p className="eyebrow">Execution history</p>
           {snapshot.operations
             .filter((operation) => operation.name === 'repl')
             .map((operation) => (
               <details key={operation.id} className="operation-record">
                 <summary>
                   <span>{operation.status}</span>
-                  <span>{new Date(operation.startedAt).toLocaleTimeString()}</span>
+                  <span>{new Date(operation.startedAt).toLocaleTimeString('en-US')}</span>
                 </summary>
                 <pre>{(operation.input as { code?: string })?.code}</pre>
                 <Button
                   variant="ghost"
                   onClick={() => setCode((operation.input as { code?: string })?.code ?? '')}
                 >
-                  复制到编辑器
+                  Copy to editor
                 </Button>
                 <pre>{JSON.stringify(operation.output, null, 2)}</pre>
               </details>
@@ -132,12 +137,14 @@ export function DebugPane({
         <div key={value} className="debug-content" hidden={tab !== value}>
           <div className="filter-bar">
             <input
-              aria-label="筛选事件"
-              placeholder="筛选内容…"
+              aria-label="Filter events"
+              placeholder="Filter events…"
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
             />
-            <span className="muted small">最近 {events.length} 条</span>
+            <span className="muted small">
+              Latest {events.length} {events.length === 1 ? 'event' : 'events'}
+            </span>
           </div>
           <Scroller>
             {events.length ? (
@@ -156,8 +163,8 @@ export function DebugPane({
             ) : (
               <div className="empty-debug">
                 {snapshot.connected
-                  ? '当前缓冲区暂无匹配事件。'
-                  : '连接调试后将收集当前网页的事件。'}
+                  ? 'No matching events in the current buffer.'
+                  : 'Connect the debugger to collect events from the current page.'}
               </div>
             )}
           </Scroller>
@@ -171,7 +178,9 @@ export function DebugPane({
               .map((artifact) => (
                 <ArtifactImage key={artifact.id} reference={artifact} client={client} />
               ))}
-            {!artifacts.length && <div className="empty-debug">点击截图保存当前网页画面。</div>}
+            {!artifacts.length && (
+              <div className="empty-debug">Capture a screenshot to save the current page.</div>
+            )}
           </div>
         </Scroller>
       </div>
@@ -192,14 +201,14 @@ function EventRow({ event, body }: { event: BrowserEvent; body: (requestId: stri
   return (
     <details className="event-row">
       <summary>
-        <time>{new Date(event.at).toLocaleTimeString()}</time>
+        <time>{new Date(event.at).toLocaleTimeString('en-US')}</time>
         <span>{event.method.replace(/^(Runtime|Network|Log)\./, '')}</span>
         <span className="event-summary">{String(summary).slice(0, 500)}</span>
       </summary>
       <pre>{JSON.stringify(event.params, null, 2)}</pre>
       {params.requestId && (
         <Button variant="ghost" onClick={() => body(params.requestId)}>
-          读取响应正文
+          Read response body
         </Button>
       )}
     </details>

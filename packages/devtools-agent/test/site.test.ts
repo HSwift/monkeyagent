@@ -18,6 +18,32 @@ async function database(name = crypto.randomUUID()) {
 }
 
 describe('site ownership', () => {
+  it('shows English default titles for legacy sessions while preserving user content', async () => {
+    const db = await database();
+    const workspace = await WorkspaceService.create(db, 'https://example.com');
+    const session = await SessionService.create(db, workspace.id, 'https://example.com');
+    expect((await session.metadata()).title).toBe('New session');
+    await session.patch({ title: '新会话' });
+    expect((await session.metadata()).title).toBe('New session');
+    expect((await SessionService.list(db, workspace.id))[0].title).toBe('New session');
+    await db.put('conversations', {
+      id: session.id,
+      messages: [
+        {
+          id: 'user-message',
+          role: 'user',
+          parts: [{ type: 'text', text: '新会话' }],
+        },
+      ],
+    });
+    expect((await session.metadata()).title).toBe('新会话');
+    expect((await SessionService.list(db, workspace.id))[0].title).toBe('新会话');
+    expect((await db.get('conversations', session.id))?.messages[0].parts[0]).toEqual({
+      type: 'text',
+      text: '新会话',
+    });
+  });
+
   it('prefers the browser PSL and passes a normalized hostname', () => {
     const getDomain = vi.fn().mockReturnValue('tenant.example.com');
     vi.stubGlobal('chrome', { publicSuffix: { getDomain } });

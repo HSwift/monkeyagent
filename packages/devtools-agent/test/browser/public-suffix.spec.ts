@@ -48,7 +48,7 @@ for (const fallback of [false, true]) {
       await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
       await page
         .frameLocator('iframe')
-        .getByRole('button', { name: '模型设置', exact: true })
+        .getByRole('button', { name: 'Model settings', exact: true })
         .waitFor();
       const nativeAvailable = await page.evaluate(() => (window as any).__nativeSuffixAvailable);
       test.skip(

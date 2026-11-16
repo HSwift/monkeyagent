@@ -25,7 +25,7 @@ export function CodeEditor({
   onChange,
   onSelection,
   readOnly = false,
-  label = '代码编辑器',
+  label = 'Code editor',
   onRun,
 }: {
   value: string;

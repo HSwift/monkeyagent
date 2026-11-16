@@ -110,20 +110,20 @@ test('real F12 page can attach native debugging and run packaged QuickJS under M
             })
           ).result.value,
       )
-      .toContain('有什么可以帮你');
+      .toContain('How can I help');
     await expect
       .poll(
         async () =>
           (
             await panel.send('Runtime.evaluate', {
-              expression: `[...document.querySelectorAll('header button')].some(el=>el.textContent==='调试')`,
+              expression: `[...document.querySelectorAll('header button')].some(el=>el.textContent==='Debug')`,
               returnByValue: true,
             })
           ).result.value,
       )
       .toBe(true);
     await panel.send('Runtime.evaluate', {
-      expression: `[...document.querySelectorAll('header button')].find(el=>el.textContent==='调试').click()`,
+      expression: `[...document.querySelectorAll('header button')].find(el=>el.textContent==='Debug').click()`,
     });
     await expect
       .poll(
@@ -135,9 +135,9 @@ test('real F12 page can attach native debugging and run packaged QuickJS under M
             })
           ).result.value,
       )
-      .toContain('连接当前网页');
+      .toContain('Connect to page');
     await panel.send('Runtime.evaluate', {
-      expression: `[...document.querySelectorAll('button')].find(el=>el.textContent==='执行').click()`,
+      expression: `[...document.querySelectorAll('button')].find(el=>el.textContent==='Run').click()`,
     });
     await expect
       .poll(
@@ -149,7 +149,7 @@ test('real F12 page can attach native debugging and run packaged QuickJS under M
             })
           ).result.value,
       )
-      .toContain('执行结果');
+      .toContain('Result');
     // Switching native panels keeps the hidden Controller and its debugger alive.
     await frontend.send('Runtime.evaluate', {
       expression: `(async()=>{const UI=await import('./ui/legacy/legacy.js');await UI.InspectorView.InspectorView.instance().showPanel('network');})()`,

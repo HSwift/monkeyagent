@@ -81,16 +81,14 @@ test('AI SDK browser loop streams a multi-step tool call conversation and persis
     const page = await context.newPage();
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     const panel = page.frameLocator('iframe');
-    await panel.getByRole('button', { name: '模型设置', exact: true }).click();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).click();
     await panel.getByLabel('API Base URL').fill(`http://127.0.0.1:${port}/v1`);
-    await panel.getByLabel('模型名称').fill('test-model');
-    await panel.getByLabel('模型支持图片，可查看页面截图').check();
-    await panel.getByRole('button', { name: '保存设置', exact: true }).click();
-    await panel
-      .getByRole('textbox', { name: '发送给 Agent 的需求' })
-      .fill('创建脚本并读取网页标题');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
-    await expect(panel.getByText('任务完成', { exact: true })).toBeVisible();
+    await panel.getByLabel('Model name').fill('test-model');
+    await panel.getByLabel('Model supports images and page screenshots').check();
+    await panel.getByRole('button', { name: 'Save settings', exact: true }).click();
+    await panel.getByRole('textbox', { name: 'Message Agent' }).fill('创建脚本并读取网页标题');
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect(panel.getByText('Completed', { exact: true })).toBeVisible();
     await expect(
       panel.getByText('已创建 agent.user.js，并读取当前网页标题。', { exact: true }),
     ).toBeVisible();

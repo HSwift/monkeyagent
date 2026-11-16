@@ -171,12 +171,12 @@ return await browser.verify(${JSON.stringify(path)}, "document.querySelector('#a
             })
           ).result.value,
       )
-      .toContain('有什么可以帮你');
+      .toContain('How can I help');
     await panel.send('Runtime.evaluate', {
       expression: `(()=>{const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'创建按钮并验证点击效果，发现问题后修复。');input.dispatchEvent(new Event('input',{bubbles:true}));})()`,
     });
     await panel.send('Runtime.evaluate', {
-      expression: `document.querySelector('button[aria-label="发送消息"]').click()`,
+      expression: `document.querySelector('button[aria-label="Send message"]').click()`,
     });
     await expect
       .poll(
@@ -189,7 +189,7 @@ return await browser.verify(${JSON.stringify(path)}, "document.querySelector('#a
           ).result.value,
         { timeout: 15000 },
       )
-      .toContain('任务完成');
+      .toContain('Completed');
     expect(calls).toBe(5);
     expect(verificationResults).toEqual([false, true]);
     await expect(target.locator('#agent-e2e')).toHaveText('Clicked');
@@ -203,7 +203,7 @@ return await browser.verify(${JSON.stringify(path)}, "document.querySelector('#a
             })
           ).result.value,
       )
-      .toContain('验证通过');
+      .toContain('Verification passed');
   } finally {
     await context.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

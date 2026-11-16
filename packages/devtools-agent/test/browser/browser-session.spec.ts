@@ -35,7 +35,7 @@ test('browser contexts, navigation invalidation, screenshots and explicit reconn
     const page = await context.newPage();
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     const panel = page.frameLocator('iframe');
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     const frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const run = (code: string) => rpc(frame, 'repl.run', code);
     expect((await run('return await browser.evaluate("document.title");')).value).toBe(

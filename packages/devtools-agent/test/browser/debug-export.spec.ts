@@ -24,7 +24,7 @@ test('internal console export reads a session and its site workspace without cha
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     await page
       .frameLocator('iframe')
-      .getByRole('button', { name: '模型设置', exact: true })
+      .getByRole('button', { name: 'Model settings', exact: true })
       .waitFor();
     const frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     await rpc(frame, 'files.write', '/workspace/other.js', 'OTHER_WORKSPACE_PRIVATE_DATA');

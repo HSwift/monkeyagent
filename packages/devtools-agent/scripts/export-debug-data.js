@@ -112,7 +112,7 @@
     ],
   });
   copyToClipboard(JSON.stringify(trace, null, 2));
-  console.info('Agent 调试数据已复制。请粘贴保存为 monkeyagent-debug.json。', {
+  console.info('Agent debug data copied. Paste it into monkeyagent-debug.json.', {
     workspaceId: trace.workspace.id, sessionId: trace.session.id, title: trace.session.title,
     messages: trace.conversation.messages.length, runs: trace.runs.length,
     operations: trace.operations.length, files: trace.files.length,

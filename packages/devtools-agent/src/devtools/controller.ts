@@ -15,7 +15,7 @@ import { ScriptService, installedSummary } from '../scripts/service';
 import { openAgentDB, type AgentDB } from '../workspace/database';
 import { WorkspaceService, fileSummary } from '../workspace/service';
 import { acquireSessionLease } from '../workspace/lease';
-import { SessionService } from '../workspace/session';
+import { DEFAULT_SESSION_TITLE, SessionService } from '../workspace/session';
 import { siteWorkspaceId } from '../workspace/site';
 import { createModel, loadSettings, saveSettings, checkConnection } from '../model/settings';
 import { ACTIVE_TOOLS, createTools, findArtifacts } from '../agent/tools';
@@ -159,7 +159,7 @@ export class Controller {
       this.workspace,
       () => this.publish(),
       (reason) => {
-        this.error = `调试连接已断开：${reason}`;
+        this.error = `Debugger disconnected: ${reason}`;
         this.stop();
         this.publish();
       },
@@ -469,7 +469,7 @@ export class Controller {
     await tx.objectStore('sessions').put({
       ...session,
       conversationId,
-      title: '新会话',
+      title: DEFAULT_SESSION_TITLE,
       updatedAt: Date.now(),
     });
     await tx.objectStore('conversations').put({ id: this.session.id, messages: [] });
@@ -513,7 +513,7 @@ export class Controller {
           .map((p) => p.text)
           .join(' ') ?? '';
       if (messages.filter((m) => m.role === 'user').length === 1)
-        await this.session.patch({ title: lastText.slice(0, 60) || '新会话' });
+        await this.session.patch({ title: lastText.slice(0, 60) || DEFAULT_SESSION_TITLE });
       const settings = await loadSettings();
       this.run.model = {
         provider: settings.provider,

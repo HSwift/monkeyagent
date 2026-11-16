@@ -31,10 +31,10 @@ export function Conversation({ children }: { children: ReactNode }) {
         <Button
           className="scroll-bottom"
           onClick={() => scrollToBottom()}
-          aria-label="跳到最新消息"
+          aria-label="Jump to latest message"
         >
           <ArrowDown size={14} />
-          最新消息
+          Latest message
         </Button>
       )}
     </div>
@@ -71,12 +71,12 @@ export function ArtifactImage({
     return (
       <span className="muted">
         <ImageIcon size={14} />
-        加载截图…
+        Loading screenshot…
       </span>
     );
   return (
     <a href={url} target="_blank" rel="noreferrer" className="artifact-image">
-      <img src={url} alt="被检查页面的截图" />
+      <img src={url} alt="Screenshot of the inspected page" />
       <span>
         {reference.mimeType} · {(reference.size / 1024).toFixed(0)} KB
       </span>
@@ -112,7 +112,7 @@ function ToolCard({
         )}
         <span className="tool-name">
           {name === 'files'
-            ? `${part.input?.op ?? '文件操作'} ${path?.split('/').pop() ?? ''}`
+            ? `${part.input?.op ?? 'File operation'} ${path?.split('/').pop() ?? ''}`
             : name === 'repl'
               ? (part.input?.description ?? 'JavaScript REPL')
               : `${name} ${path?.split('/').pop() ?? part.input?.pattern ?? ''}`}
@@ -125,11 +125,11 @@ function ToolCard({
             {path}
           </button>
         )}
-        <p className="eyebrow">输入</p>
+        <p className="eyebrow">Input</p>
         <pre>{part.input?.code ?? JSON.stringify(part.input ?? {}, null, 2)}</pre>
-        <p className="eyebrow">结果</p>
+        <p className="eyebrow">Result</p>
         <pre>{part.errorText ?? JSON.stringify(result ?? null, null, 2)}</pre>
-        {result && <p className="eyebrow">用时 {Math.round(result.durationMs)} ms</p>}
+        {result && <p className="eyebrow">Duration {Math.round(result.durationMs)} ms</p>}
         {result?.artifacts
           ?.filter((ref) => ref.mimeType.startsWith('image/'))
           .map((ref) => (
@@ -150,7 +150,7 @@ export function ChatMessage({
 }) {
   return (
     <article className={`message message-${message.role}`}>
-      <div className="message-author sr-only">{message.role === 'user' ? '你' : 'Agent'}</div>
+      <div className="message-author sr-only">{message.role === 'user' ? 'You' : 'Agent'}</div>
       <div className="message-body">
         {message.parts.map((part, index) =>
           part.type === 'text' ? (

@@ -33,7 +33,7 @@ test('same-site tabs share files and session history while other sites remain is
         await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
         await page
           .frameLocator('iframe')
-          .getByRole('button', { name: '模型设置', exact: true })
+          .getByRole('button', { name: 'Model settings', exact: true })
           .waitFor();
         return {
           page,
@@ -110,7 +110,7 @@ test('same-site tabs share files and session history while other sites remain is
     await windows[0].page.reload();
     await windows[0].page
       .frameLocator('iframe')
-      .getByRole('button', { name: '模型设置', exact: true })
+      .getByRole('button', { name: 'Model settings', exact: true })
       .waitFor();
     const reopened = windows[0].page
       .frames()
@@ -147,7 +147,7 @@ test('navigation changes site scope with or without a debugger connection and re
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     await page
       .frameLocator('iframe')
-      .getByRole('button', { name: '模型设置', exact: true })
+      .getByRole('button', { name: 'Model settings', exact: true })
       .waitFor();
     const frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const original = await rpc(frame, 'snapshot');

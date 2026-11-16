@@ -64,8 +64,8 @@ export function Settings({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title="模型与偏好"
-      description="配置兼容 Chat Completions 的模型服务，调用由扩展直接发起。"
+      title="Model and preferences"
+      description="Configure a Chat Completions compatible endpoint. Requests are sent directly by the extension."
       sheet
     >
       <form
@@ -76,7 +76,7 @@ export function Settings({
         }}
       >
         <label>
-          服务类型
+          Service type
           <select
             value={settings.provider}
             onChange={(event) =>
@@ -97,11 +97,11 @@ export function Settings({
           />
         </label>
         <label>
-          模型名称
+          Model name
           <input
             value={settings.model}
             onChange={(event) => change('model', event.target.value)}
-            placeholder="填写服务商提供的模型 ID"
+            placeholder="Enter the model ID from your provider"
             required
           />
         </label>
@@ -112,7 +112,7 @@ export function Settings({
             autoComplete="off"
             value={settings.apiKey}
             onChange={(event) => change('apiKey', event.target.value)}
-            placeholder="保存在此扩展的本地配置中"
+            placeholder="Stored locally in this extension"
           />
         </label>
         <label className="checkbox-label">
@@ -121,21 +121,22 @@ export function Settings({
             checked={settings.supportsImages}
             onChange={(event) => change('supportsImages', event.target.checked)}
           />
-          模型支持图片，可查看页面截图
+          Model supports images and page screenshots
         </label>
         <label>
-          界面主题
+          Theme
           <select
             value={settings.theme}
             onChange={(event) => change('theme', event.target.value as ModelSettings['theme'])}
           >
-            <option value="system">跟随开发者工具</option>
-            <option value="light">浅色</option>
-            <option value="dark">深色</option>
+            <option value="system">Use DevTools theme</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
           </select>
         </label>
         <p className="muted small">
-          密钥不进入 Agent 工作区、提示词或 Monkey 设置导出。连接检查会向当前服务发送一条简短请求。
+          Your key is kept out of workspace files, prompts, and Monkey settings exports. Checking
+          the connection sends a short request to this endpoint.
         </p>
         {error && (
           <div className="error-banner" role="alert">
@@ -145,15 +146,15 @@ export function Settings({
         {checked && (
           <div className="success-text">
             <Check size={14} />
-            连接成功
+            Connection successful
           </div>
         )}
         <div className="form-actions">
           <Button onClick={() => void check()} disabled={busy}>
-            {busy && <LoaderCircle size={14} className="spin" />}检查连接
+            {busy && <LoaderCircle size={14} className="spin" />}Check connection
           </Button>
           <Button type="submit" variant="primary" disabled={busy}>
-            保存设置
+            Save settings
           </Button>
         </div>
       </form>

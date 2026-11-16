@@ -62,7 +62,7 @@ export function Modal({
           <div className="dialog-header">
             <Dialog.Title>{title}</Dialog.Title>
             <Dialog.Close asChild>
-              <Button variant="ghost" aria-label="关闭">
+              <Button variant="ghost" aria-label="Close">
                 <X size={16} />
               </Button>
             </Dialog.Close>

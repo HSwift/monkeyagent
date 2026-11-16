@@ -103,7 +103,7 @@ test('familiar tools recover from validation errors, run browser JS and persist 
     const page = await context.newPage();
     await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
     const panel = page.frameLocator('iframe');
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     let frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     await rpc(frame, 'settings.save', {
       provider: 'openai-compatible',
@@ -113,9 +113,9 @@ test('familiar tools recover from validation errors, run browser JS and persist 
       supportsImages: false,
       theme: 'light',
     });
-    const input = panel.getByRole('textbox', { name: '发送给 Agent 的需求' });
+    const input = panel.getByRole('textbox', { name: 'Message Agent' });
     await input.fill('重放文件工具错误并检查浏览器接口');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(panel.getByText('接口检查完成；未验证脚本注入。', { exact: true })).toBeVisible();
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.status).toBe('completed');
     const names = requests[0].tools.map((item: any) => item.function.name);
@@ -146,7 +146,7 @@ test('familiar tools recover from validation errors, run browser JS and persist 
     expect(JSON.stringify(first.run)).not.toContain('test-key-not-in-run');
     expect(first.error).toBeUndefined();
     await input.fill('继续第二轮');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect(panel.getByText('第二轮完成。', { exact: true })).toBeVisible();
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.status).toBe('completed');
     await page.reload();
@@ -156,7 +156,7 @@ test('familiar tools recover from validation errors, run browser JS and persist 
     expect(readResult('read-0').content).toContain('1→// ==UserScript==');
     expect(readResult('read-1').files).toContain(file_path);
     expect(readResult('read-2').results[0].text).toContain('"after"');
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const assistants = (await rpc(frame, 'snapshot')).messages.filter(
       (message: any) => message.role === 'assistant',
@@ -165,13 +165,13 @@ test('familiar tools recover from validation errors, run browser JS and persist 
     expect(assistants.every((message: any) => message.id)).toBe(true);
     expect(new Set(assistants.map((message: any) => message.id)).size).toBe(2);
     await input.fill('检查真正的模型连接失败');
-    await panel.getByRole('button', { name: '发送消息', exact: true }).click();
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.status).toBe('failed');
     expect((await rpc(frame, 'snapshot')).run.error).toContain(
       'simulated terminal provider failure',
     );
     await page.reload();
-    await panel.getByRole('button', { name: '模型设置', exact: true }).waitFor();
+    await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     expect((await rpc(frame, 'snapshot')).run.error).toContain(
       'simulated terminal provider failure',
