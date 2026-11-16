@@ -10,23 +10,31 @@ import {
   Download,
   Play,
   RotateCcw,
-  PanelLeftClose,
+  X,
 } from 'lucide-react';
-import { Button, IconButton, Modal, Tabs, Scroller } from '../components/ui';
+import { Button, IconButton, Modal, Scroller } from '../components/ui';
 import { CodeEditor, DiffEditor } from '../components/code-editor';
 import type { ControllerClient } from '../protocol/client';
 import type { FileRecord, ScriptSummary, Snapshot, ToolResult } from '../protocol/types';
 import { DebugPane } from './debug';
 
 type Attachment = { path: string; content: string; selection: string };
+export type WorkspaceView = 'files' | 'changes' | 'debug';
+const VIEW_LABELS: Record<WorkspaceView, string> = {
+  files: '文件',
+  changes: '变更',
+  debug: '调试',
+};
 const editorDrafts = new Map<string, { draft: string; base: FileRecord; conflict?: FileRecord }>();
 export function WorkspacePane({
   client,
   snapshot,
   selectedPath,
   selectFile,
-  activeTab,
-  setActiveTab,
+  view,
+  setView,
+  open,
+  close,
   attach,
   report,
 }: {
@@ -34,12 +42,13 @@ export function WorkspacePane({
   snapshot: Snapshot;
   selectedPath: string;
   selectFile: (path: string) => void;
-  activeTab: string;
-  setActiveTab: (tab: string) => void;
+  view: WorkspaceView;
+  setView: (view: WorkspaceView) => void;
+  open: boolean;
+  close: () => void;
   attach: (value: Attachment) => void;
   report: (error: unknown) => void;
 }) {
-  const [tree, setTree] = useState(true);
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const [dialog, setDialog] = useState<'new' | 'rename' | 'delete' | 'import' | null>(null);
   const [path, setPath] = useState('/workspace/main.user.js');
@@ -47,6 +56,11 @@ export function WorkspacePane({
   const [scriptId, setScriptId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // The entrance animation starts offscreen; focusing must not scroll its parent.
+    if (open) closeButton.current?.focus({ preventScroll: true });
+  }, [open, view]);
   const file = snapshot.files.find((file) => file.path === selectedPath);
   async function submit() {
     setBusy(true);
@@ -86,7 +100,7 @@ export function WorkspacePane({
         selectFile(path);
       }
       setDialog(null);
-      setActiveTab('files');
+      setView('files');
     } catch (error) {
       setError((error as Error).message);
     } finally {
@@ -111,161 +125,149 @@ export function WorkspacePane({
   ].sort();
   return (
     <section className="workspace-pane">
-      <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="workspace-tabs">
-        <div className="pane-toolbar">
-          <Tabs.List className="tab-list" aria-label="工作区视图">
-            <Tabs.Trigger value="files">文件</Tabs.Trigger>
-            <Tabs.Trigger value="changes">变更</Tabs.Trigger>
-            <Tabs.Trigger value="debug">调试</Tabs.Trigger>
-          </Tabs.List>
-          <div className="toolbar-actions">
-            <IconButton label="导入 Monkey 脚本" onClick={() => openDialog('import')}>
-              <Download size={14} />
-            </IconButton>
-            <IconButton label="新建文件" onClick={() => openDialog('new')}>
-              <Plus size={15} />
-            </IconButton>
-          </div>
+      <div className="drawer-heading">
+        <h2>{VIEW_LABELS[view]}</h2>
+        <div className="toolbar-actions">
+          {view === 'files' && (
+            <>
+              <IconButton label="导入 Monkey 脚本" onClick={() => openDialog('import')}>
+                <Download size={14} />
+              </IconButton>
+              <IconButton label="新建文件" onClick={() => openDialog('new')}>
+                <Plus size={15} />
+              </IconButton>
+            </>
+          )}
+          <Button
+            ref={closeButton}
+            variant="ghost"
+            className="icon-button"
+            aria-label="关闭抽屉"
+            onClick={close}
+          >
+            <X size={16} />
+          </Button>
         </div>
-        <Tabs.Content value="files" className="workspace-content" forceMount>
-          <div className="file-layout">
-            {tree && (
-              <aside
-                className="file-tree"
-                aria-label="工作区文件"
-                onKeyDown={(event) => {
-                  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-                  const files = [
-                    ...event.currentTarget.querySelectorAll<HTMLButtonElement>('button.tree-file'),
-                  ];
-                  if (!files.length) return;
-                  const index = files.indexOf(event.target as HTMLButtonElement);
-                  const next =
-                    event.key === 'Home'
-                      ? 0
-                      : event.key === 'End'
-                        ? files.length - 1
-                        : Math.max(
-                            0,
-                            Math.min(
-                              files.length - 1,
-                              index + (event.key === 'ArrowDown' ? 1 : -1),
-                            ),
-                          );
-                  event.preventDefault();
-                  files[next].click();
-                  files[next].focus();
-                }}
-              >
-                <div className="tree-header">
-                  <span>工作区</span>
-                  <IconButton label="收起文件树" onClick={() => setTree(false)}>
-                    <PanelLeftClose size={13} />
+      </div>
+      <div className="workspace-content" hidden={view !== 'files'}>
+        <div className="file-layout">
+          <aside
+            className="file-tree"
+            aria-label="工作区文件"
+            onKeyDown={(event) => {
+              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+              const files = [
+                ...event.currentTarget.querySelectorAll<HTMLButtonElement>('button.tree-file'),
+              ];
+              if (!files.length) return;
+              const index = files.indexOf(event.target as HTMLButtonElement);
+              const next =
+                event.key === 'Home'
+                  ? 0
+                  : event.key === 'End'
+                    ? files.length - 1
+                    : Math.max(
+                        0,
+                        Math.min(files.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)),
+                      );
+              event.preventDefault();
+              files[next].click();
+              files[next].focus();
+            }}
+          >
+            <div className="tree-header">
+              <span>工作区</span>
+            </div>
+            <Scroller>
+              {groups.map((group) => (
+                <div key={group}>
+                  <button
+                    className="tree-folder"
+                    onClick={() =>
+                      setCollapsed((current) => {
+                        const next = new Set(current);
+                        next.has(group) ? next.delete(group) : next.add(group);
+                        return next;
+                      })
+                    }
+                  >
+                    {collapsed.has(group) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                    <FolderOpen size={13} />
+                    {group.split('/').pop()}
+                  </button>
+                  {!collapsed.has(group) &&
+                    snapshot.files
+                      .filter((file) => file.path.slice(0, file.path.lastIndexOf('/')) === group)
+                      .map((file) => (
+                        <button
+                          key={file.path}
+                          className={`tree-file ${selectedPath === file.path ? 'selected' : ''}`}
+                          onClick={() => selectFile(file.path)}
+                          title={file.path}
+                        >
+                          <FileCode2 size={13} />
+                          <span>{file.path.split('/').pop()}</span>
+                          {snapshot.workspace.bindings[file.path]?.fileRevision !==
+                            file.revision && <span className="file-dot" />}
+                        </button>
+                      ))}
+                </div>
+              ))}
+              {!snapshot.files.length && <p className="tree-empty">还没有文件</p>}
+            </Scroller>
+          </aside>
+          <div className="file-main">
+            {file ? (
+              <>
+                <div className="file-toolbar">
+                  <span className="file-path">{file.path}</span>
+                  <IconButton label="重命名文件" onClick={() => openDialog('rename')}>
+                    <Pencil size={13} />
+                  </IconButton>
+                  <IconButton label="删除文件" onClick={() => openDialog('delete')}>
+                    <Trash2 size={13} />
                   </IconButton>
                 </div>
-                <Scroller>
-                  {groups.map((group) => (
-                    <div key={group}>
-                      <button
-                        className="tree-folder"
-                        onClick={() =>
-                          setCollapsed((current) => {
-                            const next = new Set(current);
-                            next.has(group) ? next.delete(group) : next.add(group);
-                            return next;
-                          })
-                        }
-                      >
-                        {collapsed.has(group) ? (
-                          <ChevronRight size={12} />
-                        ) : (
-                          <ChevronDown size={12} />
-                        )}
-                        <FolderOpen size={13} />
-                        {group.split('/').pop()}
-                      </button>
-                      {!collapsed.has(group) &&
-                        snapshot.files
-                          .filter(
-                            (file) => file.path.slice(0, file.path.lastIndexOf('/')) === group,
-                          )
-                          .map((file) => (
-                            <button
-                              key={file.path}
-                              className={`tree-file ${selectedPath === file.path ? 'selected' : ''}`}
-                              onClick={() => selectFile(file.path)}
-                              title={file.path}
-                            >
-                              <FileCode2 size={13} />
-                              <span>{file.path.split('/').pop()}</span>
-                              {snapshot.workspace.bindings[file.path]?.fileRevision !==
-                                file.revision && <span className="file-dot" />}
-                            </button>
-                          ))}
-                    </div>
-                  ))}
-                  {!snapshot.files.length && <p className="tree-empty">还没有文件</p>}
-                </Scroller>
-              </aside>
-            )}
-            <div className="file-main">
-              {file ? (
-                <>
-                  <div className="file-toolbar">
-                    {!tree && (
-                      <IconButton label="展开文件树" onClick={() => setTree(true)}>
-                        <FolderOpen size={14} />
-                      </IconButton>
-                    )}
-                    <span className="file-path">{file.path}</span>
-                    <IconButton label="重命名文件" onClick={() => openDialog('rename')}>
-                      <Pencil size={13} />
-                    </IconButton>
-                    <IconButton label="删除文件" onClick={() => openDialog('delete')}>
-                      <Trash2 size={13} />
-                    </IconButton>
-                  </div>
-                  <FileEditor
-                    key={`${snapshot.workspace.id}:${file.path}`}
-                    file={file}
-                    snapshot={snapshot}
-                    client={client}
-                    report={report}
-                    showDiff={() => setActiveTab('changes')}
-                    attach={attach}
-                  />
-                </>
-              ) : (
-                <div className="empty-workspace">
-                  <FileCode2 size={30} />
-                  <h3>从一个脚本开始</h3>
-                  <p>让 Agent 创建文件，或导入现有脚本继续修改。</p>
-                  <div className="inline-actions">
-                    <Button onClick={() => openDialog('new')}>
-                      <Plus size={14} />
-                      新建文件
-                    </Button>
-                    <Button onClick={() => openDialog('import')}>
-                      <Download size={14} />
-                      导入脚本
-                    </Button>
-                  </div>
+                <FileEditor
+                  key={`${snapshot.workspace.id}:${file.path}`}
+                  file={file}
+                  snapshot={snapshot}
+                  client={client}
+                  report={report}
+                  showDiff={() => setView('changes')}
+                  attach={attach}
+                />
+              </>
+            ) : (
+              <div className="empty-workspace">
+                <FileCode2 size={30} />
+                <h3>从一个脚本开始</h3>
+                <p>让 Agent 创建文件，或导入现有脚本继续修改。</p>
+                <div className="inline-actions">
+                  <Button onClick={() => openDialog('new')}>
+                    <Plus size={14} />
+                    新建文件
+                  </Button>
+                  <Button onClick={() => openDialog('import')}>
+                    <Download size={14} />
+                    导入脚本
+                  </Button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
-        </Tabs.Content>
-        <Tabs.Content value="changes" className="workspace-content">
-          {file ? (
-            <Changes client={client} file={file} snapshot={snapshot} report={report} />
-          ) : (
-            <div className="empty-workspace">选择一个文件查看变更</div>
-          )}
-        </Tabs.Content>
-        <Tabs.Content value="debug" className="workspace-content">
-          <DebugPane client={client} snapshot={snapshot} report={report} />
-        </Tabs.Content>
-      </Tabs.Root>
+        </div>
+      </div>
+      <div className="workspace-content" hidden={view !== 'changes'}>
+        {file ? (
+          <Changes client={client} file={file} snapshot={snapshot} report={report} />
+        ) : (
+          <div className="empty-workspace">选择一个文件查看变更</div>
+        )}
+      </div>
+      <div className="workspace-content" hidden={view !== 'debug'}>
+        <DebugPane client={client} snapshot={snapshot} report={report} />
+      </div>
       <Modal
         open={!!dialog}
         onOpenChange={(open) => {

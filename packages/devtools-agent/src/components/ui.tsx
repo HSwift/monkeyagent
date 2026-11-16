@@ -1,5 +1,5 @@
 // Composition follows shadcn/ui's Radix patterns. See THIRD_PARTY.md for sources and licenses.
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ComponentPropsWithRef, ReactNode } from 'react';
 import { Dialog, Tooltip, Tabs, ScrollArea, Collapsible } from 'radix-ui';
 import { X } from 'lucide-react';
 import clsx from 'clsx';
@@ -8,7 +8,7 @@ export function Button({
   className,
   variant = 'default',
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
+}: ComponentPropsWithRef<'button'> & {
   variant?: 'default' | 'primary' | 'ghost' | 'danger';
 }) {
   return (

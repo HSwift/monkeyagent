@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useChat } from '@ai-sdk/react';
-import { Group, Panel, Separator } from 'react-resizable-panels';
+import { DropdownMenu } from 'radix-ui';
 import {
-  Bot,
   Plus,
+  SquarePen,
   History,
   Settings2,
   ArrowUp,
@@ -11,9 +11,8 @@ import {
   Paperclip,
   X,
   Globe2,
-  PanelRightOpen,
-  MessageSquare,
-  Sparkles,
+  MoreHorizontal,
+  ChevronDown,
   AlertCircle,
   RotateCcw,
 } from 'lucide-react';
@@ -22,11 +21,17 @@ import { Conversation, ChatMessage } from '../components/conversation';
 import { ControllerChatTransport, type ControllerClient } from '../protocol/client';
 import type { ModelSettings, Snapshot } from '../protocol/types';
 import { Settings } from './settings';
+import type { WorkspaceView } from './workspace';
 const WorkspacePane = lazy(() =>
   import('./workspace').then((module) => ({ default: module.WorkspacePane })),
 );
 
 type Attachment = { path: string; content: string; selection: string };
+const DRAWERS: { view: WorkspaceView; label: string }[] = [
+  { view: 'files', label: '文件' },
+  { view: 'changes', label: '变更' },
+  { view: 'debug', label: '调试' },
+];
 const STATUS_LABELS: Record<string, string> = {
   idle: '就绪',
   generating: '正在生成',
@@ -48,11 +53,10 @@ export function App({ client }: { client: ControllerClient }) {
   const [clearing, setClearing] = useState(false);
   const [model, setModel] = useState('配置模型');
   const [selectedPath, setSelectedPath] = useState('/workspace/main.user.js');
-  const [workspaceTab, setWorkspaceTab] = useState('files');
-  const [mobileTab, setMobileTab] = useState('chat');
-  const [narrow, setNarrow] = useState(false);
+  const [drawerView, setDrawerView] = useState<WorkspaceView>('files');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerTriggers = useRef<Partial<Record<WorkspaceView, HTMLButtonElement | null>>>({});
   const [attachment, setAttachment] = useState<Attachment>();
-  const root = useRef<HTMLDivElement>(null);
   function report(error: unknown) {
     setError(error instanceof Error ? error.message : String(error));
   }
@@ -67,12 +71,7 @@ export function App({ client }: { client: ControllerClient }) {
     const unsubscribe = client.subscribe(setSnapshot);
     client.call<Snapshot>('snapshot').then(setSnapshot).catch(report);
     client.call<ModelSettings>('settings.get').then(applySettings).catch(report);
-    const observer = new ResizeObserver((entries) => setNarrow(entries[0].contentRect.width < 720));
-    if (root.current) observer.observe(root.current);
-    return () => {
-      unsubscribe();
-      observer.disconnect();
-    };
+    return unsubscribe;
   }, []);
   useEffect(() => {
     const stop = (event: KeyboardEvent) => {
@@ -85,6 +84,21 @@ export function App({ client }: { client: ControllerClient }) {
     return () => window.removeEventListener('keydown', stop);
   }, [client]);
   useEffect(() => {
+    if (!drawerOpen) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (
+        event.key === 'Escape' &&
+        !event.defaultPrevented &&
+        !document.querySelector('[role="dialog"], [role="menu"]')
+      ) {
+        event.preventDefault();
+        closeDrawer();
+      }
+    };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [drawerOpen, drawerView]);
+  useEffect(() => {
     if (
       snapshot &&
       !snapshot.files.some((file) => file.path === selectedPath) &&
@@ -96,7 +110,7 @@ export function App({ client }: { client: ControllerClient }) {
     const value = await client.call<Snapshot>('workspace.new');
     setSnapshot(value);
     setAttachment(undefined);
-    setMobileTab('chat');
+    setDrawerOpen(false);
   }
   async function clearConversation() {
     setClearing(true);
@@ -105,7 +119,7 @@ export function App({ client }: { client: ControllerClient }) {
       setSnapshot(value);
       setError('');
       setAttachment(undefined);
-      setMobileTab('chat');
+      setDrawerOpen(false);
       setClearOpen(false);
     } catch (error) {
       report(error);
@@ -115,8 +129,15 @@ export function App({ client }: { client: ControllerClient }) {
   }
   function openFile(path: string) {
     setSelectedPath(path);
-    setWorkspaceTab('changes');
-    setMobileTab('workspace');
+    openDrawer('changes');
+  }
+  function openDrawer(view: WorkspaceView) {
+    setDrawerView(view);
+    setDrawerOpen(true);
+  }
+  function closeDrawer() {
+    setDrawerOpen(false);
+    drawerTriggers.current[drawerView]?.focus({ preventScroll: true });
   }
   let host = '';
   try {
@@ -124,19 +145,18 @@ export function App({ client }: { client: ControllerClient }) {
   } catch {}
   return (
     <Tooltip.Provider delayDuration={300}>
-      <div ref={root} className="app">
+      <div className="app">
         <header className="app-header">
-          <div className="brand">
-            <span className="brand-icon">
-              <Bot size={19} />
-            </span>
+          <button
+            className="model-select"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="模型设置"
+            title="选择和配置模型"
+          >
             <strong>Agent</strong>
-            <span className="brand-caption">MONKEY</span>
-          </div>
-          <div className="target-pill" title={snapshot?.workspace.targetUrl}>
-            <Globe2 size={12} />
-            <span>{host || '当前网页'}</span>
-          </div>
+            {model !== '配置模型' && <span>{model}</span>}
+            <ChevronDown size={14} />
+          </button>
           <div className="header-actions">
             {snapshot &&
               (running(snapshot) ||
@@ -148,27 +168,57 @@ export function App({ client }: { client: ControllerClient }) {
                   <Square size={13} />
                 </IconButton>
               )}
-            <button
-              className="model-select"
-              onClick={() => setSettingsOpen(true)}
-              title="选择和配置模型"
-            >
-              <span className="model-dot" />
-              {model}
-            </button>
             <IconButton
               label="新会话"
               disabled={clearing || (!!snapshot && running(snapshot))}
               onClick={() => void newSession().catch(report)}
             >
-              <Plus size={16} />
+              <SquarePen size={17} />
             </IconButton>
-            <IconButton label="会话历史" onClick={() => setHistoryOpen(true)}>
-              <History size={16} />
-            </IconButton>
-            <IconButton label="模型设置" onClick={() => setSettingsOpen(true)}>
-              <Settings2 size={16} />
-            </IconButton>
+            <nav className="drawer-actions" aria-label="辅助工具">
+              {DRAWERS.map(({ view, label }) => (
+                <Button
+                  key={view}
+                  ref={(element) => {
+                    drawerTriggers.current[view] = element;
+                  }}
+                  variant="ghost"
+                  className="drawer-toggle"
+                  aria-expanded={drawerOpen && drawerView === view}
+                  aria-controls="tool-drawer"
+                  onClick={() => {
+                    if (drawerOpen && drawerView === view) closeDrawer();
+                    else openDrawer(view);
+                  }}
+                >
+                  {label}
+                </Button>
+              ))}
+            </nav>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button className="button button-ghost icon-button" aria-label="更多操作">
+                  <MoreHorizontal size={18} />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content className="action-menu" align="end" sideOffset={8}>
+                  <DropdownMenu.Item onSelect={() => setHistoryOpen(true)}>
+                    <History size={15} />
+                    会话历史
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item onSelect={() => setSettingsOpen(true)}>
+                    <Settings2 size={15} />
+                    模型设置
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item disabled={clearing} onSelect={() => setClearOpen(true)}>
+                    <RotateCcw size={15} />
+                    清空上下文
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           </div>
         </header>
         {(error || snapshot?.error) && (
@@ -187,36 +237,9 @@ export function App({ client }: { client: ControllerClient }) {
             </Button>
           </div>
         )}
-        {narrow && (
-          <nav className="mobile-tabs">
-            <Button
-              variant={mobileTab === 'chat' ? 'default' : 'ghost'}
-              onClick={() => setMobileTab('chat')}
-            >
-              <MessageSquare size={13} />
-              对话
-            </Button>
-            <Button
-              variant={mobileTab === 'workspace' ? 'default' : 'ghost'}
-              onClick={() => setMobileTab('workspace')}
-            >
-              <PanelRightOpen size={13} />
-              工作区
-            </Button>
-          </nav>
-        )}
         {snapshot ? (
-          <Group
-            className={`main-layout ${narrow ? 'narrow' : ''}`}
-            orientation="horizontal"
-            disabled={narrow}
-          >
-            <Panel
-              id="chat"
-              defaultSize="40%"
-              minSize={narrow ? 0 : '280px'}
-              className={`resize-panel ${narrow && mobileTab !== 'chat' ? 'hidden' : ''}`}
-            >
+          <main className="main-layout">
+            <div className="chat-layout" inert={drawerOpen}>
               <ChatArea
                 key={snapshot.workspace.conversationId ?? snapshot.workspace.id}
                 client={client}
@@ -226,37 +249,51 @@ export function App({ client }: { client: ControllerClient }) {
                 configure={() => setSettingsOpen(true)}
                 attachment={attachment}
                 clearAttachment={() => setAttachment(undefined)}
-                clearConversation={() => setClearOpen(true)}
-                clearing={clearing}
+                openWorkspace={() => openDrawer('files')}
+                host={host}
+                configured={model !== '配置模型'}
               />
-            </Panel>
-            <Separator className={`resize-handle ${narrow ? 'hidden' : ''}`} />
-            <Panel
-              id="workspace"
-              defaultSize="60%"
-              minSize={narrow ? 0 : '320px'}
-              className={`resize-panel ${narrow && mobileTab !== 'workspace' ? 'hidden' : ''}`}
+            </div>
+            {drawerOpen && (
+              <button
+                className="drawer-backdrop"
+                tabIndex={-1}
+                aria-hidden="true"
+                onClick={closeDrawer}
+              />
+            )}
+            <aside
+              id="tool-drawer"
+              className="tool-drawer"
+              aria-label={`${DRAWERS.find(({ view }) => view === drawerView)?.label}抽屉`}
+              hidden={!drawerOpen}
             >
-              <Suspense fallback={<div className="loading-app">正在打开工作区…</div>}>
+              <Suspense fallback={<div className="loading-app">正在打开…</div>}>
                 <WorkspacePane
                   client={client}
                   snapshot={snapshot}
                   selectedPath={selectedPath}
                   selectFile={setSelectedPath}
-                  activeTab={workspaceTab}
-                  setActiveTab={setWorkspaceTab}
+                  view={drawerView}
+                  setView={setDrawerView}
+                  open={drawerOpen}
+                  close={closeDrawer}
                   report={report}
                   attach={(attachment) => {
                     setAttachment(attachment);
-                    setMobileTab('chat');
+                    setDrawerOpen(false);
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector<HTMLTextAreaElement>('.prompt-form textarea')
+                        ?.focus({ preventScroll: true }),
+                    );
                   }}
                 />
               </Suspense>
-            </Panel>
-          </Group>
+            </aside>
+          </main>
         ) : (
           <div className="loading-app">
-            <Bot size={28} />
             <p>正在连接开发者工具…</p>
           </div>
         )}
@@ -331,8 +368,9 @@ function ChatArea({
   configure,
   attachment,
   clearAttachment,
-  clearConversation,
-  clearing,
+  openWorkspace,
+  host,
+  configured,
 }: {
   client: ControllerClient;
   snapshot: Snapshot;
@@ -341,8 +379,9 @@ function ChatArea({
   configure: () => void;
   attachment?: Attachment;
   clearAttachment: () => void;
-  clearConversation: () => void;
-  clearing: boolean;
+  openWorkspace: () => void;
+  host: string;
+  configured: boolean;
 }) {
   const conversationId = snapshot.workspace.conversationId ?? snapshot.workspace.id;
   const transport = useMemo(
@@ -350,6 +389,12 @@ function ChatArea({
     [client, conversationId],
   );
   const [input, setInput] = useState('');
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!textarea.current) return;
+    textarea.current.style.height = 'auto';
+    textarea.current.style.height = `${Math.min(textarea.current.scrollHeight, 200)}px`;
+  }, [input]);
   const initialResume = useRef(running(snapshot)).current;
   const chat = useChat({
     id: conversationId,
@@ -373,21 +418,8 @@ function ChatArea({
     if (busy) await client.call('chat.queue', content);
     else await chat.sendMessage({ text: content });
   }
-  const suggestions = ['为当前网页编写脚本', '修改已有脚本', '检查脚本报错'];
   return (
-    <section className="chat-pane">
-      <div className="chat-heading">
-        <span>对话</span>
-        <span className="muted chat-title">
-          {snapshot.messages.length
-            ? snapshot.workspace.title.slice(0, 28)
-            : '当前网页的脚本工作台'}
-        </span>
-        <Button variant="ghost" disabled={clearing} onClick={clearConversation}>
-          <RotateCcw size={12} />
-          清空上下文
-        </Button>
-      </div>
+    <section className={`chat-pane ${chat.messages.length ? '' : 'is-empty'}`} aria-label="对话">
       <Conversation>
         {chat.messages.length ? (
           chat.messages.map((message) => (
@@ -395,128 +427,112 @@ function ChatArea({
           ))
         ) : (
           <div className="chat-empty">
-            <div className="empty-icon">
-              <Sparkles size={24} />
-            </div>
-            <p className="eyebrow">BUILD FOR THIS PAGE</p>
-            <h1>
-              把想法变成
-              <br />
-              网页上的改变。
-            </h1>
-            <p>
-              描述你想做的事。Agent 可以编写脚本，
-              <br />
-              安装到 Monkey，并在当前网页验证。
-            </p>
-            <div className="suggestions">
-              {suggestions.map((text, index) => (
-                <button
-                  key={text}
-                  onClick={() => {
-                    if (index === 1) setInput('我想修改已有脚本，请先列出已安装脚本。');
-                    else if (index === 2) setInput('请连接当前网页，检查脚本报错并分析原因。');
-                    else setInput('请先检查当前网页，帮我编写一个脚本：');
-                  }}
-                >
-                  <span>{text}</span>
-                  <ArrowUp size={13} />
-                </button>
-              ))}
-            </div>
-            <Button variant="ghost" className="configure-hint" onClick={configure}>
-              首次使用，先配置模型 API
-            </Button>
+            <h1>有什么可以帮你？</h1>
           </div>
         )}
       </Conversation>
-      {snapshot.run && (
-        <div className={`run-status run-${snapshot.run.status}`}>
-          <span className={`status-dot ${busy ? 'pulse' : ''}`} />
-          <span>{STATUS_LABELS[snapshot.run.status]}</span>
-          {snapshot.run.status === 'limit_reached' && (
-            <Button
-              variant="ghost"
-              onClick={() => void send('请继续完成任务，先检查现有状态。').catch(report)}
-            >
-              继续
-            </Button>
-          )}
-        </div>
-      )}
-      {!!snapshot.run?.queued.length && (
-        <div className="queue-list">
-          <p className="eyebrow">{busy ? '步骤边界发送' : '尚未消费的补充要求'}</p>
-          {snapshot.run.queued.map((text, index) => (
-            <div key={index}>
-              <span>{text.slice(0, 140)}</span>
-              {!busy && <Button onClick={() => void send(text).catch(report)}>发送</Button>}
-            </div>
-          ))}
-        </div>
-      )}
-      <form
-        className="prompt-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send().catch(report);
-        }}
-      >
-        {attachment && (
-          <div className="attachment-chip">
-            <Paperclip size={12} />
-            <span>
-              {attachment.path.split('/').pop()}
-              {attachment.selection ? ' · 选区' : ''}
-            </span>
-            <button type="button" onClick={clearAttachment} aria-label="移除附件">
-              <X size={12} />
-            </button>
+      <div className="composer-area">
+        {snapshot.run && (
+          <div className={`run-status run-${snapshot.run.status}`} role="status">
+            <span>{STATUS_LABELS[snapshot.run.status]}</span>
+            {snapshot.run.status === 'limit_reached' && (
+              <Button
+                variant="ghost"
+                onClick={() => void send('请继续完成任务，先检查现有状态。').catch(report)}
+              >
+                继续
+              </Button>
+            )}
           </div>
         )}
-        <textarea
-          aria-label="发送给 Agent 的需求"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          placeholder={busy ? '补充要求，将在步骤边界发送…' : '想为这个网页做些什么？'}
-          rows={3}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              void send().catch(report);
-            }
-            if (event.key === 'Escape' && busy) {
-              void client.call('stop');
-              void chat.stop();
-            }
+        {!!snapshot.run?.queued.length && (
+          <div className="queue-list">
+            <p className="eyebrow">{busy ? '步骤边界发送' : '尚未消费的补充要求'}</p>
+            {snapshot.run.queued.map((text, index) => (
+              <div key={index}>
+                <span>{text.slice(0, 140)}</span>
+                {!busy && <Button onClick={() => void send(text).catch(report)}>发送</Button>}
+              </div>
+            ))}
+          </div>
+        )}
+        <form
+          className="prompt-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void send().catch(report);
           }}
-        />
-        <div className="prompt-actions">
-          <span>Enter 发送 · Shift Enter 换行</span>
-          {busy && (
-            <Button
-              variant="danger"
-              onClick={() => {
-                void client.call('stop').catch(report);
-                void chat.stop();
-              }}
-            >
-              <Square size={11} fill="currentColor" />
-              停止
-            </Button>
+        >
+          {attachment && (
+            <div className="attachment-chip">
+              <Paperclip size={12} />
+              <span>
+                {attachment.path.split('/').pop()}
+                {attachment.selection ? ' · 选区' : ''}
+              </span>
+              <button type="button" onClick={clearAttachment} aria-label="移除附件">
+                <X size={12} />
+              </button>
+            </div>
           )}
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={!input.trim()}
-            aria-label={busy ? '加入发送队列' : '发送消息'}
-          >
-            <ArrowUp size={15} />
-            {busy ? '排队' : '发送'}
-          </Button>
-        </div>
-      </form>
-      <div className="chat-footer">操作目标始终是当前被检查的网页</div>
+          <textarea
+            ref={textarea}
+            aria-label="发送给 Agent 的需求"
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder={busy ? '补充要求，将在步骤边界发送…' : '想为这个网页做些什么？'}
+            rows={1}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                void send().catch(report);
+              }
+              if (event.key === 'Escape' && busy) {
+                void client.call('stop');
+                void chat.stop();
+              }
+            }}
+          />
+          <div className="prompt-actions">
+            <IconButton label="添加文件" onClick={openWorkspace}>
+              <Plus size={19} />
+            </IconButton>
+            <span className="prompt-context" title={snapshot.workspace.targetUrl}>
+              <Globe2 size={12} />
+              {host || '当前网页'}
+            </span>
+            {busy && (
+              <Button
+                variant="primary"
+                className="send-button"
+                aria-label="停止"
+                onClick={() => {
+                  void client.call('stop').catch(report);
+                  void chat.stop();
+                }}
+              >
+                <Square size={11} fill="currentColor" />
+              </Button>
+            )}
+            {(!busy || input.trim()) && (
+              <Button
+                type="submit"
+                variant="primary"
+                className="send-button"
+                disabled={!input.trim()}
+                aria-label={busy ? '加入发送队列' : '发送消息'}
+              >
+                <ArrowUp size={18} />
+              </Button>
+            )}
+          </div>
+        </form>
+        {!configured && (
+          <button className="configure-hint" onClick={configure}>
+            设置模型以开始对话
+          </button>
+        )}
+      </div>
     </section>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Play, Camera, PlugZap, Unplug, LoaderCircle } from 'lucide-react';
-import { Tabs, Button, Scroller } from '../components/ui';
+import { Button, Scroller } from '../components/ui';
 import { CodeEditor } from '../components/code-editor';
 import { ArtifactImage } from '../components/conversation';
 import type { ControllerClient } from '../protocol/client';
@@ -46,7 +46,7 @@ export function DebugPane({
       (event) => !filter || JSON.stringify(event).toLowerCase().includes(filter.toLowerCase()),
     );
   return (
-    <Tabs.Root value={tab} onValueChange={setTab} className="debug-pane">
+    <div className="debug-pane">
       <div className="debug-header">
         <span className={`connection-state ${snapshot.connected ? 'online' : ''}`}>
           <span className="status-dot" />
@@ -72,13 +72,15 @@ export function DebugPane({
           截图
         </Button>
       </div>
-      <Tabs.List className="tab-list debug-tab-list" aria-label="调试工具">
-        <Tabs.Trigger value="repl">REPL</Tabs.Trigger>
-        <Tabs.Trigger value="logs">日志</Tabs.Trigger>
-        <Tabs.Trigger value="network">网络</Tabs.Trigger>
-        <Tabs.Trigger value="screenshots">截图</Tabs.Trigger>
-      </Tabs.List>
-      <Tabs.Content value="repl" className="debug-content">
+      <div className="debug-tool-select">
+        <select aria-label="调试工具" value={tab} onChange={(event) => setTab(event.target.value)}>
+          <option value="repl">JavaScript REPL</option>
+          <option value="logs">日志</option>
+          <option value="network">网络</option>
+          <option value="screenshots">截图</option>
+        </select>
+      </div>
+      <div className="debug-content" hidden={tab !== 'repl'}>
         <div className="repl-editor">
           <CodeEditor
             value={code}
@@ -125,9 +127,9 @@ export function DebugPane({
               </details>
             ))}
         </Scroller>
-      </Tabs.Content>
+      </div>
       {['logs', 'network'].map((value) => (
-        <Tabs.Content key={value} value={value} className="debug-content">
+        <div key={value} className="debug-content" hidden={tab !== value}>
           <div className="filter-bar">
             <input
               aria-label="筛选事件"
@@ -159,9 +161,9 @@ export function DebugPane({
               </div>
             )}
           </Scroller>
-        </Tabs.Content>
+        </div>
       ))}
-      <Tabs.Content value="screenshots" className="debug-content">
+      <div className="debug-content" hidden={tab !== 'screenshots'}>
         <Scroller>
           <div className="screenshot-grid">
             {artifacts
@@ -172,8 +174,8 @@ export function DebugPane({
             {!artifacts.length && <div className="empty-debug">点击截图保存当前网页画面。</div>}
           </div>
         </Scroller>
-      </Tabs.Content>
-    </Tabs.Root>
+      </div>
+    </div>
   );
 }
 function EventRow({ event, body }: { event: BrowserEvent; body: (requestId: string) => void }) {

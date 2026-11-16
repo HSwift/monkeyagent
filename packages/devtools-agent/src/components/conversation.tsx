@@ -117,33 +117,25 @@ function ToolCard({
               ? (part.input?.description ?? 'JavaScript REPL')
               : `${name} ${path?.split('/').pop() ?? part.input?.pattern ?? ''}`}
         </span>
-        <span className="tool-duration">
-          {complete
-            ? result
-              ? `${Math.round(result.durationMs)} ms`
-              : failed
-                ? '失败'
-                : '完成'
-            : '执行中'}
-        </span>
       </Collapsible.Trigger>
-      {path && (
-        <button className="file-link" onClick={() => openFile(path)}>
-          <FileCode2 size={12} />
-          {path}
-        </button>
-      )}
       <Collapsible.Content className="tool-details">
+        {path && (
+          <button className="file-link" onClick={() => openFile(path)}>
+            <FileCode2 size={12} />
+            {path}
+          </button>
+        )}
         <p className="eyebrow">输入</p>
         <pre>{part.input?.code ?? JSON.stringify(part.input ?? {}, null, 2)}</pre>
         <p className="eyebrow">结果</p>
         <pre>{part.errorText ?? JSON.stringify(result ?? null, null, 2)}</pre>
+        {result && <p className="eyebrow">用时 {Math.round(result.durationMs)} ms</p>}
+        {result?.artifacts
+          ?.filter((ref) => ref.mimeType.startsWith('image/'))
+          .map((ref) => (
+            <ArtifactImage key={ref.id} reference={ref} client={client} />
+          ))}
       </Collapsible.Content>
-      {result?.artifacts
-        ?.filter((ref) => ref.mimeType.startsWith('image/'))
-        .map((ref) => (
-          <ArtifactImage key={ref.id} reference={ref} client={client} />
-        ))}
     </Collapsible.Root>
   );
 }
@@ -158,7 +150,7 @@ export function ChatMessage({
 }) {
   return (
     <article className={`message message-${message.role}`}>
-      <div className="message-author">{message.role === 'user' ? '你' : 'Agent'}</div>
+      <div className="message-author sr-only">{message.role === 'user' ? '你' : 'Agent'}</div>
       <div className="message-body">
         {message.parts.map((part, index) =>
           part.type === 'text' ? (

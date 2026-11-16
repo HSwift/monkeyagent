@@ -171,7 +171,7 @@ return await browser.verify(${JSON.stringify(path)}, "document.querySelector('#a
             })
           ).result.value,
       )
-      .toContain('把想法变成');
+      .toContain('有什么可以帮你');
     await panel.send('Runtime.evaluate', {
       expression: `(()=>{const input=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'创建按钮并验证点击效果，发现问题后修复。');input.dispatchEvent(new Event('input',{bubbles:true}));})()`,
     });

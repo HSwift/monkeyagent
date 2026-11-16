@@ -110,20 +110,20 @@ test('real F12 page can attach native debugging and run packaged QuickJS under M
             })
           ).result.value,
       )
-      .toContain('把想法变成');
+      .toContain('有什么可以帮你');
     await expect
       .poll(
         async () =>
           (
             await panel.send('Runtime.evaluate', {
-              expression: `[...document.querySelectorAll('[role="tab"]')].some(el=>el.textContent==='调试')`,
+              expression: `[...document.querySelectorAll('header button')].some(el=>el.textContent==='调试')`,
               returnByValue: true,
             })
           ).result.value,
       )
       .toBe(true);
     await panel.send('Runtime.evaluate', {
-      expression: `[...document.querySelectorAll('button')].find(el=>el.textContent==='工作区')?.click(); [...document.querySelectorAll('[role="tab"]')].find(el=>el.textContent==='调试').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}))`,
+      expression: `[...document.querySelectorAll('header button')].find(el=>el.textContent==='调试').click()`,
     });
     await expect
       .poll(

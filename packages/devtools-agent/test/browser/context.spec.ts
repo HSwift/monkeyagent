@@ -77,12 +77,14 @@ test('clearing context persists, preserves the workspace and excludes old messag
     const oldConversationId = before.workspace.conversationId ?? before.workspace.id;
 
     // Cancelling the dialog must preserve the conversation.
-    await panel.getByRole('button', { name: '清空上下文', exact: true }).click();
+    await panel.getByRole('button', { name: '更多操作', exact: true }).click();
+    await panel.getByRole('menuitem', { name: '清空上下文', exact: true }).click();
     await panel.getByRole('button', { name: '取消', exact: true }).click();
     await expect(panel.getByText('旧上下文的回复', { exact: true })).toBeVisible();
-    await panel.getByRole('button', { name: '清空上下文', exact: true }).click();
+    await panel.getByRole('button', { name: '更多操作', exact: true }).click();
+    await panel.getByRole('menuitem', { name: '清空上下文', exact: true }).click();
     await panel.getByRole('button', { name: '清空', exact: true }).click();
-    await expect(panel.getByRole('heading', { name: '把想法变成 网页上的改变。' })).toBeVisible();
+    await expect(panel.getByRole('heading', { name: '有什么可以帮你？' })).toBeVisible();
     const cleared = await rpc(frame, 'snapshot');
     expect(cleared.workspace.id).toBe(before.workspace.id);
     expect(cleared.workspace.conversationId).not.toBe(oldConversationId);
@@ -117,9 +119,10 @@ test('clearing context persists, preserves the workspace and excludes old messag
     await input.fill('即将丢弃的补充要求');
     await panel.getByRole('button', { name: '加入发送队列', exact: true }).click();
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.queued.length).toBe(1);
-    await panel.getByRole('button', { name: '清空上下文', exact: true }).click();
+    await panel.getByRole('button', { name: '更多操作', exact: true }).click();
+    await panel.getByRole('menuitem', { name: '清空上下文', exact: true }).click();
     await panel.getByRole('button', { name: '停止并清空', exact: true }).click();
-    await expect(panel.getByRole('heading', { name: '把想法变成 网页上的改变。' })).toBeVisible();
+    await expect(panel.getByRole('heading', { name: '有什么可以帮你？' })).toBeVisible();
     await expect.poll(() => modelAborted).toBe(true);
     expect((await rpc(frame, 'snapshot')).run).toBeUndefined();
     await input.fill('清空后继续开发');
