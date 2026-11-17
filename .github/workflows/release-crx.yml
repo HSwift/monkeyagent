@@ -1,0 +1,134 @@
+name: Release CRX
+
+# Build the MV3 extension (with the Agent panel), sign it as a CRX and attach
+# it to a GitHub Release for every pushed version tag.
+#
+#   git tag -a ma-v0.1.0 -m 'MonkeyAgent 0.1.0' && git push origin ma-v0.1.0
+#
+# Tag format: ma-v<1-4 numeric parts>, optionally with a `-suffix` to mark a
+# prerelease (e.g. ma-v0.2.0-beta). The numeric part becomes the manifest version.
+# The `ma-` prefix keeps fork releases separate from upstream Violentmonkey `v*` tags.
+#
+# Required secret:
+#   CRX_PRIVATE_KEY  PEM private key used to sign the CRX. Keep it stable:
+#                    the key determines the extension ID, and changing it makes
+#                    Chrome treat the build as a different extension (local
+#                    workspaces/sessions would not carry over).
+#                    Generate once with:
+#                      openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out key.pem
+
+on:
+  push:
+    tags:
+      - 'ma-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build, e.g. ma-v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-crx-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & release CRX
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 100
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: 'package.json'
+          cache: pnpm
+
+      - name: Resolve version
+        run: |
+          if [[ ! "$TAG" =~ ^ma-v([0-9]+(\.[0-9]+){0,3})(-.+)?$ ]]; then
+            echo "::error::Tag '$TAG' must look like ma-v1.2.3 or ma-v1.2.3-beta"
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
+          PRERELEASE=false
+          [[ -n "${BASH_REMATCH[3]}" ]] && PRERELEASE=true
+          {
+            echo "VERSION=$VERSION"
+            echo "PRERELEASE=$PRERELEASE"
+            # Controls the "BETA" name suffix in the manifest (overrides pkg.beta)
+            echo "BETA=$([ "$PRERELEASE" = true ] && echo 1 || echo 0)"
+            echo "ASSETS_DIR=dist-assets"
+            echo "TEMP_DIR=tmp"
+            echo "ASSET_ZIP=MonkeyAgent-v$VERSION.zip"
+            echo "ASSET_CRX=MonkeyAgent-v$VERSION.crx"
+          } >> "$GITHUB_ENV"
+          echo "Tag=$TAG version=$VERSION prerelease=$PRERELEASE"
+
+      - name: Check signing key
+        env:
+          CRX_PRIVATE_KEY: ${{ secrets.CRX_PRIVATE_KEY }}
+        run: |
+          if [ -z "$CRX_PRIVATE_KEY" ]; then
+            echo "::error::Repository secret CRX_PRIVATE_KEY is not set (see the header of release-crx.yml)"
+            exit 1
+          fi
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm run ci
+
+      - name: Build MV3
+        run: pnpm build:mv3
+
+      - name: Zip
+        run: |
+          mkdir -p "$ASSETS_DIR"
+          (cd dist-mv3 && zip -qr "../$ASSETS_DIR/$ASSET_ZIP" .)
+
+      - name: Sign CRX
+        env:
+          CRX_PRIVATE_KEY: ${{ secrets.CRX_PRIVATE_KEY }}
+          MV3: '1'
+          DIST: dist-mv3
+          RELEASE_TAG: ${{ env.TAG }}
+        run: node scripts/crx-helper.mjs
+
+      - name: Checksums
+        run: |
+          cd "$ASSETS_DIR"
+          sha256sum "$ASSET_CRX" "$ASSET_ZIP" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES=("$ASSETS_DIR/$ASSET_CRX" "$ASSETS_DIR/$ASSET_ZIP" "$ASSETS_DIR/SHA256SUMS.txt")
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            FLAGS=(--generate-notes --title "MonkeyAgent v$VERSION")
+            [ "$PRERELEASE" = true ] && FLAGS+=(--prerelease)
+            gh release create "$TAG" "${FILES[@]}" "${FLAGS[@]}" --verify-tag --repo "$GITHUB_REPOSITORY"
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: MonkeyAgent-${{ env.TAG }}
+          path: dist-assets/*
+          if-no-files-found: error

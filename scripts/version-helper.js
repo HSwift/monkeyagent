@@ -13,7 +13,10 @@ function getVersion() {
 }
 
 function isBeta() {
-  return process.env.BETA || pkg.beta > 0;
+  const { BETA } = process.env;
+  // An explicit BETA env (e.g. `BETA=0` for tagged releases) wins over pkg.beta
+  if (BETA != null && BETA !== '') return BETA !== '0' && BETA !== 'false';
+  return pkg.beta > 0;
 }
 
 exports.getVersion = getVersion;

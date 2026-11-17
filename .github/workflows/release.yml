@@ -7,9 +7,11 @@ on:
         description: 'Dry run — build and create the GitHub release only, skip external stores'
         type: boolean
         default: false
-  push:
-    tags:
-      - v*
+  # Upstream Violentmonkey store publishing. Tag pushes are handled by
+  # release-crx.yml in MonkeyAgent, so this workflow is manual-only.
+  # push:
+  #   tags:
+  #     - v*
 
 permissions:
   contents: read

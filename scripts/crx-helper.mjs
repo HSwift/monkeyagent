@@ -13,6 +13,7 @@ const {
   ASSETS_DIR = 'dist-assets',
   DIST = 'dist',
   GITHUB_REPOSITORY = 'violentmonkey/violentmonkey',
+  RELEASE_TAG,
   TEMP_DIR = 'tmp',
 } = process.env;
 
@@ -39,7 +40,7 @@ async function main() {
   });
 
   const manifest = readManifest();
-  const url = `https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}/${crxName}`;
+  const url = `https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG || `v${version}`}/${crxName}`;
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
   <app appid="${appId}">
