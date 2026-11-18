@@ -21,6 +21,8 @@ import { createModel, loadSettings, saveSettings, checkConnection } from '../mod
 import { ACTIVE_TOOLS, createTools, findArtifacts } from '../agent/tools';
 import { FileTools } from '../agent/file-tools';
 import { INSTRUCTIONS } from '../agent/prompt';
+import { API_DOCS } from '../workspace/docs';
+import { buildDebugPack, type DebugPackTool } from '../debug/export';
 import { normalizeMessageIds, toolInputHint } from '../agent/messages';
 import { AgentError, SerialQueue, errorData, sleep } from '../protocol/errors';
 import type {
@@ -418,6 +420,8 @@ export class Controller {
         return (await this.db.getAllFromIndex('artifacts', 'workspaceId', this.workspace.id)).map(
           ({ blob: _, ...ref }) => ref,
         );
+      case 'debug.export':
+        return this.exportDebugPack();
       default:
         throw new AgentError('unknown_method', `Unknown controller method: ${method}`);
     }
@@ -539,7 +543,6 @@ export class Controller {
         repl: (code, timeout, signal) =>
           this.repl.run(code, timeout, this.operationSignal ?? signal),
       });
-      const directory = await this.workspace.list();
       let steps = 0;
       const agent = new ToolLoopAgent({
         model: createModel(settings),
@@ -548,7 +551,7 @@ export class Controller {
         stopWhen: isStepCount(30),
         toolCallConcurrency: 1,
         maxRetries: 1,
-        instructions: `${INSTRUCTIONS}\nImage input: ${settings.supportsImages ? 'enabled' : 'disabled; screenshots can be saved but you cannot inspect pixels'}\nBound inspected tab: ${this.tabId}\nTarget URL: ${this.targetUrl}\nWorkspace directory: ${JSON.stringify(directory)}\nInterrupted operations: ${JSON.stringify((await this.db.getAllFromIndex('operations', 'sessionId', this.session.id)).filter((op) => op.status === 'unknown').map(({ id, name }) => ({ id, name })))}`,
+        instructions: await this.buildInstructions(settings.supportsImages),
         prepareStep: async ({ messages: stepMessages }) => {
           this.run!.status = 'generating';
           const queued = this.run!.queued.splice(0);
@@ -667,6 +670,66 @@ export class Controller {
         this.publish();
       }
     }
+  }
+  /** System prompt for a run started now; shared by runs and debug export. */
+  private async buildInstructions(supportsImages: boolean) {
+    const directory = await this.workspace.list();
+    const interrupted = (await this.db.getAllFromIndex('operations', 'sessionId', this.session.id))
+      .filter((op) => op.status === 'unknown')
+      .map(({ id, name }) => ({ id, name }));
+    return `${INSTRUCTIONS}\nImage input: ${supportsImages ? 'enabled' : 'disabled; screenshots can be saved but you cannot inspect pixels'}\nBound inspected tab: ${this.tabId}\nTarget URL: ${this.targetUrl}\nWorkspace directory: ${JSON.stringify(directory)}\nInterrupted operations: ${JSON.stringify(interrupted)}`;
+  }
+  private async exportDebugPack() {
+    const settings = await loadSettings();
+    const unavailable = async (): Promise<never> => {
+      throw new AgentError('debug_export', 'Tools cannot run during debug export.');
+    };
+    const tools = createTools({
+      workspace: this.workspace,
+      fileTools: this.fileTools,
+      supportsImages: settings.supportsImages,
+      execute: unavailable,
+      repl: unavailable,
+    });
+    const messages = normalizeMessageIds(this.messages);
+    let modelMessages: unknown;
+    try {
+      modelMessages = await convertToModelMessages(messages, {
+        tools,
+        ignoreIncompleteToolCalls: true,
+      });
+    } catch (error) {
+      modelMessages = { error: errorData(error).message };
+    }
+    const manifest = chrome.runtime.getManifest();
+    const pack = await buildDebugPack({
+      db: this.db,
+      workspaceId: this.workspace.id,
+      sessionId: this.session.id,
+      messages,
+      modelMessages,
+      instructions: await this.buildInstructions(settings.supportsImages),
+      tools: tools as unknown as Record<string, DebugPackTool>,
+      activeTools: ACTIVE_TOOLS,
+      docs: API_DOCS,
+      settings,
+      browser: {
+        tabId: this.tabId,
+        targetUrl: this.targetUrl,
+        connected: this.browser.connected,
+        events: this.browser.allEvents(),
+      },
+      runtime: {
+        extension: manifest.name,
+        version: manifest.version,
+        userAgent: navigator.userAgent,
+      },
+    });
+    return {
+      filename: pack.filename,
+      blob: new Blob([pack.data as BlobPart], { type: 'application/zip' }),
+      counts: pack.counts,
+    };
   }
   stop() {
     this.abort?.abort();

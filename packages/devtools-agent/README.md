@@ -91,7 +91,24 @@ return { page, installed, check, screenshot: await browser.screenshot() };
 
 ## 内部调试导出
 
-无需增加界面或重新加载扩展：在 `chrome://extensions` 找到 Monkey，开启开发者模式，点击扩展的 **Service Worker / 服务工作线程** 检查入口，在其 Console 粘贴运行 [export-debug-data.js](scripts/export-debug-data.js) 的全部内容。成功后 JSON 已进入剪贴板，粘贴保存为 `monkeyagent-debug.json`。
+### 调试包（推荐）
+
+在 Agent 的 **调试** 抽屉点击 **Export debug pack**，下载当前 session 的 `monkeyagent-debug-<站点>-<时间>.zip`，用于离线排查和改进扩展：
+
+| 路径 | 内容 |
+| --- | --- |
+| `manifest.json` | 格式版本、扩展版本、导出范围、数量统计和已知局限 |
+| `settings.json` | provider、地址、模型和图片能力（不含 API Key） |
+| `agent/` | 按导出时状态重建的完整 system prompt、工具定义（JSON Schema）与 `/docs` 指南 |
+| `session/` | session 元数据、对话、发送给模型的消息、任务、全部工具调用、REPL 历史（区分手动/Agent）、可读 `transcript.md` |
+| `workspace/` | 脚本绑定、当前文件（按原路径保存为真实文件）、本 session 相关修订、文本工件 |
+| `browser/` | 被检查的标签页，以及内存中的 CDP 事件缓冲（控制台、日志、网络） |
+
+截图不导出。API Key、常见认证字段、Bearer 令牌和 URL 中的认证信息会被遮盖；脚本与网页内容仍需检查后再分享。实现见 [src/debug/](src/debug/)。
+
+### Service Worker 控制台脚本
+
+面板无法打开时的备用方式：在 `chrome://extensions` 找到 Monkey，开启开发者模式，点击扩展的 **Service Worker / 服务工作线程** 检查入口，在其 Console 粘贴运行 [export-debug-data.js](scripts/export-debug-data.js) 的全部内容。成功后 JSON 已进入剪贴板，粘贴保存为 `monkeyagent-debug.json`。
 
 脚本默认导出最近使用的 session，并打印 session ID、标题和目标网址列表。需要指定另一段任务时，将脚本顶部 `sessionId` 改为表格中的对应 ID 再执行。它只读当前 Agent 数据库，导出该 session 的对话、任务、工具输入输出与错误，以及所属站点的共享文件、修订、脚本绑定和文本工件；不读取 Monkey 的其他数据库。模型配置仅导出当前 provider、地址、模型和图片能力，不导出 API Key。常见认证字段、URL 中的认证参数以及意外出现在文本中的当前模型密钥会被遮盖；脚本与网页内容仍需检查后再分享。
 

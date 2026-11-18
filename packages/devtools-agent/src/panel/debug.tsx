@@ -1,10 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Play, Camera, PlugZap, Unplug, LoaderCircle } from 'lucide-react';
+import { Play, Camera, PlugZap, Unplug, LoaderCircle, Download } from 'lucide-react';
 import { Button, Scroller } from '../components/ui';
 import { CodeEditor } from '../components/code-editor';
 import { ArtifactImage } from '../components/conversation';
 import type { ControllerClient } from '../protocol/client';
 import type { ArtifactRef, BrowserEvent, Snapshot, ToolResult } from '../protocol/types';
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Revoke later; the download may start asynchronously.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 
 export function DebugPane({
   client,
@@ -19,6 +31,7 @@ export function DebugPane({
   const [code, setCode] = useState('return await browser.evaluate("document.title");');
   const [result, setResult] = useState<ToolResult>();
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [filter, setFilter] = useState('');
   const [artifacts, setArtifacts] = useState<ArtifactRef[]>([]);
   const lastOperation = snapshot.operations[0];
@@ -34,6 +47,19 @@ export function DebugPane({
       report(error);
     } finally {
       setBusy(false);
+    }
+  }
+  async function exportPack() {
+    setExporting(true);
+    try {
+      const { blob, filename } = await client.call<{ blob: Blob; filename: string }>(
+        'debug.export',
+      );
+      downloadBlob(blob, filename);
+    } catch (error) {
+      report(error);
+    } finally {
+      setExporting(false);
     }
   }
   const events = snapshot.events
@@ -70,6 +96,14 @@ export function DebugPane({
         >
           <Camera size={13} />
           Capture screenshot
+        </Button>
+        <Button
+          onClick={() => void exportPack()}
+          disabled={exporting}
+          title="Download this session's agent context, workspace, REPL history and browser events as a zip for offline debugging. Credentials are redacted; scripts and page data are included."
+        >
+          {exporting ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
+          Export debug pack
         </Button>
       </div>
       <div className="debug-tool-select">

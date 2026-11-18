@@ -183,6 +183,10 @@ export class BrowserSession {
   recentEvents(limit = 200) {
     return this.buffer.slice(-Math.min(limit, 200)).map(({ bytes: _, ...event }) => event);
   }
+  /** Entire in-memory event buffer, for debug export. */
+  allEvents(): BrowserEvent[] {
+    return this.buffer.map(({ bytes: _, ...event }) => event);
+  }
   async waitForEvent(
     method: string,
     options: { timeoutMs?: number; sessionId?: string } = {},
