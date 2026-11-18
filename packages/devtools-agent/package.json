@@ -21,6 +21,7 @@
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "@lezer/highlight": "1.2.5",
     "ai": "7.0.163",
     "clsx": "2.1.1",
     "codemirror": "6.0.2",
@@ -35,6 +36,7 @@
     "react-dom": "19.3.1",
     "react-markdown": "10.1.0",
     "react-resizable-panels": "4.19.0",
+    "remark-gfm": "4.0.1",
     "use-stick-to-bottom": "1.1.6",
     "zod": "4.6.7"
   },

@@ -431,8 +431,16 @@ function ChatArea({
     >
       <Conversation>
         {chat.messages.length ? (
-          chat.messages.map((message) => (
-            <ChatMessage key={message.id} message={message} client={client} openFile={openFile} />
+          chat.messages.map((message, index) => (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              client={client}
+              openFile={openFile}
+              streaming={
+                busy && message.role === 'assistant' && index === chat.messages.length - 1
+              }
+            />
           ))
         ) : (
           <div className="chat-empty">

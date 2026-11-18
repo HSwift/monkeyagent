@@ -16,6 +16,8 @@ Dependencies are pinned in package.json and the repository pnpm lockfile. All ex
 | use-stick-to-bottom                         | https://github.com/stackblitz-labs/use-stick-to-bottom | MIT        | Chat scroll behavior                                                  |
 | Lucide                                      | https://github.com/lucide-icons/lucide                 | ISC        | Icons                                                                 |
 | react-markdown                              | https://github.com/remarkjs/react-markdown             | MIT        | Response rendering without raw HTML                                   |
+| remark-gfm                                  | https://github.com/remarkjs/remark-gfm                 | MIT        | GitHub Flavored Markdown (tables, task lists, strikethrough, autolinks) |
+| Lezer highlight                             | https://github.com/lezer-parser/highlight              | MIT        | Static syntax highlighting of chat code blocks                        |
 | clsx                                        | https://github.com/lukeed/clsx                         | MIT        | Class composition                                                     |
 | picomatch                                   | https://github.com/micromatch/picomatch                | MIT        | Glob pattern matching                                                 |
 | RE2JS                                       | https://github.com/le0pard/re2js                       | MIT        | Browser regex search without backtracking                              |

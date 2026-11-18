@@ -569,11 +569,96 @@ strong {
 .markdown ol {
   padding-left: 22px;
 }
-.markdown pre {
-  background: var(--background);
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
+.markdown ul,
+.markdown ol,
+.markdown blockquote,
+.markdown .markdown-table,
+.markdown .code-block {
+  margin: 0 0 12px;
+}
+.markdown > :last-child,
+.markdown li > :last-child {
+  margin-bottom: 0;
+}
+.markdown li {
+  margin: 2px 0;
+}
+.markdown li > p {
+  margin-bottom: 6px;
+}
+.markdown li > ul,
+.markdown li > ol {
+  margin: 4px 0;
+}
+.markdown li::marker {
+  color: var(--muted);
+}
+.markdown .contains-task-list {
+  list-style: none;
+  padding-left: 4px;
+}
+.markdown .task-list-item input {
+  margin: 0 8px 0 0;
+  vertical-align: -1px;
+  accent-color: var(--accent);
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 20px 0 8px;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown h1 {
+  font-size: 18px;
+}
+.markdown h2 {
+  font-size: 16px;
+}
+.markdown h3 {
+  font-size: 15px;
+}
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 14px;
+}
+.markdown h6 {
+  color: var(--muted);
+}
+.markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 3px;
+}
+.markdown a:hover {
+  text-decoration-color: currentColor;
+}
+.markdown strong {
+  font-weight: 600;
+}
+.markdown del {
+  color: var(--muted);
+}
+.markdown blockquote {
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 18px 0;
+}
+.markdown img {
+  max-width: 100%;
 }
 .markdown code {
   font: 12px var(--font-mono);
@@ -581,17 +666,148 @@ strong {
   border-radius: 4px;
   padding: 2px 4px;
 }
-.markdown pre code {
+.markdown-table {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: normal;
+}
+.markdown th,
+.markdown td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.markdown th {
+  font-weight: 600;
+  background: var(--background);
+  white-space: nowrap;
+}
+.markdown tr:last-child td {
+  border-bottom: 0;
+}
+.markdown th + th,
+.markdown td + td {
+  border-left: 1px solid var(--border);
+}
+.code-block {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font: 11px var(--font-mono);
+}
+.code-block-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: inherit;
+}
+.code-block-copy:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.code-block pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+.code-block pre code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
   background: none;
   padding: 0;
+  font-size: 12px;
   line-height: 1.7;
+  white-space: pre;
+  overflow-wrap: normal;
 }
-.markdown h1,
-.markdown h2,
-.markdown h3 {
-  font-size: 16px;
-  line-height: 1.5;
-  margin: 18px 0 10px;
+/* Lezer classHighlighter tokens, colored to match CodeMirror's default highlight style. */
+.code-block {
+  --tok-keyword: #708;
+  --tok-atom: #219;
+  --tok-number: #164;
+  --tok-string: #a11;
+  --tok-string2: #e40;
+  --tok-variable: #00f;
+  --tok-definition: #00f;
+  --tok-type: #085;
+  --tok-property: #00c;
+  --tok-comment: #940;
+  --tok-meta: #555;
+  --tok-invalid: #f00;
+}
+:root[data-theme='dark'] .code-block {
+  --tok-keyword: #c792ea;
+  --tok-atom: #f78c6c;
+  --tok-number: #f78c6c;
+  --tok-string: #c3e88d;
+  --tok-string2: #89ddff;
+  --tok-variable: #82aaff;
+  --tok-definition: #82aaff;
+  --tok-type: #ffcb6b;
+  --tok-property: #82aaff;
+  --tok-comment: #8b8b8b;
+  --tok-meta: #a3a3a3;
+  --tok-invalid: #ff5370;
+}
+.code-block .tok-keyword {
+  color: var(--tok-keyword);
+}
+.code-block .tok-atom,
+.code-block .tok-bool {
+  color: var(--tok-atom);
+}
+.code-block .tok-number {
+  color: var(--tok-number);
+}
+.code-block .tok-string {
+  color: var(--tok-string);
+}
+.code-block .tok-string2 {
+  color: var(--tok-string2);
+}
+.code-block .tok-variableName.tok-definition,
+.code-block .tok-variableName2 {
+  color: var(--tok-definition);
+}
+.code-block .tok-typeName,
+.code-block .tok-namespace,
+.code-block .tok-className {
+  color: var(--tok-type);
+}
+.code-block .tok-propertyName.tok-definition {
+  color: var(--tok-property);
+}
+.code-block .tok-comment {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+.code-block .tok-meta {
+  color: var(--tok-meta);
+}
+.code-block .tok-invalid {
+  color: var(--tok-invalid);
 }
 .tool-card {
   margin: 8px 0;

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
-import Markdown from 'react-markdown';
+import { MessageMarkdown } from './markdown';
 import {
   ArrowDown,
   ChevronRight,
@@ -143,24 +143,32 @@ export function ChatMessage({
   message,
   client,
   openFile,
+  streaming = false,
 }: {
   message: UIMessage;
   client: ControllerClient;
   openFile: (path: string) => void;
+  /** True while this message is still receiving tokens. */
+  streaming?: boolean;
 }) {
+  const lastText = message.parts.findLastIndex((part) => part.type === 'text');
   return (
     <article className={`message message-${message.role}`}>
       <div className="message-author sr-only">{message.role === 'user' ? 'You' : 'Agent'}</div>
       <div className="message-body">
         {message.parts.map((part, index) =>
           part.type === 'text' ? (
-            <div className="markdown" key={index}>
-              {message.role === 'user' ? (
+            message.role === 'user' ? (
+              <div className="markdown" key={index}>
                 <p className="user-text">{part.text}</p>
-              ) : (
-                <Markdown>{part.text}</Markdown>
-              )}
-            </div>
+              </div>
+            ) : (
+              <MessageMarkdown
+                key={index}
+                text={part.text}
+                streaming={streaming && index === lastText}
+              />
+            )
           ) : part.type.startsWith('tool-') || part.type === 'dynamic-tool' ? (
             <ToolCard key={index} part={part} client={client} openFile={openFile} />
           ) : null,
