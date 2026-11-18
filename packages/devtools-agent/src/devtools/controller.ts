@@ -1,6 +1,5 @@
 import {
   ToolLoopAgent,
-  isStepCount,
   convertToModelMessages,
   readUIMessageStream,
   InvalidToolInputError,
@@ -557,7 +556,9 @@ export class Controller {
         model: createModel(settings),
         tools,
         activeTools: [...ACTIVE_TOOLS],
-        stopWhen: isStepCount(30),
+        // No step cap: the loop ends when the model stops calling tools, or when the user stops it.
+        // An explicit condition is required; omitting stopWhen falls back to the SDK default cap.
+        stopWhen: () => false,
         toolCallConcurrency: 1,
         maxRetries: 1,
         instructions: await this.buildInstructions(settings.supportsImages),
@@ -628,13 +629,7 @@ export class Controller {
       await consumeUI;
       this.run.finishReason = failed ? 'error' : await result.finishReason;
       if (this.run.finishReason === 'error') failed = true;
-      this.run.status = abort.signal.aborted
-        ? 'interrupted'
-        : failed
-          ? 'failed'
-          : steps >= 30
-            ? 'limit_reached'
-            : 'completed';
+      this.run.status = abort.signal.aborted ? 'interrupted' : failed ? 'failed' : 'completed';
       if (failed) this.run.error = this.error ?? 'Model stream ended with an error.';
     } catch (error) {
       this.error ??= errorData(error).message;
