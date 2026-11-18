@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Button, IconButton, Modal, Scroller, Tooltip } from '../components/ui';
 import { Conversation, ChatMessage } from '../components/conversation';
+import { injectionMessage, interleave } from '../agent/interleave';
 import { ControllerChatTransport, type ControllerClient } from '../protocol/client';
 import type { ModelSettings, Snapshot } from '../protocol/types';
 import { Settings } from './settings';
@@ -410,6 +411,19 @@ function ChatArea({
     onError: report,
   });
   const busy = running(snapshot) || chat.status === 'submitted' || chat.status === 'streaming';
+  const injected = snapshot.run?.injected;
+  // The live stream is one assistant message; place consumed queued messages where the agent
+  // received them, as the controller does when it persists the conversation.
+  const displayed = useMemo(() => {
+    const pending = (injected ?? []).filter(
+      (injection) => !chat.messages.some((message) => message.id === injection.id),
+    );
+    if (!pending.length) return chat.messages;
+    const last = chat.messages.at(-1);
+    return last?.role === 'assistant'
+      ? [...chat.messages.slice(0, -1), ...interleave(last, pending)]
+      : [...chat.messages, ...pending.map(injectionMessage)];
+  }, [chat.messages, injected]);
   useEffect(() => {
     if (!running(snapshot) && chat.status !== 'streaming' && chat.status !== 'submitted')
       chat.setMessages(snapshot.messages);
@@ -426,20 +440,18 @@ function ChatArea({
   }
   return (
     <section
-      className={`chat-pane ${chat.messages.length ? '' : 'is-empty'}`}
+      className={`chat-pane ${displayed.length ? '' : 'is-empty'}`}
       aria-label="Conversation"
     >
       <Conversation>
-        {chat.messages.length ? (
-          chat.messages.map((message, index) => (
+        {displayed.length ? (
+          displayed.map((message, index) => (
             <ChatMessage
               key={message.id}
               message={message}
               client={client}
               openFile={openFile}
-              streaming={
-                busy && message.role === 'assistant' && index === chat.messages.length - 1
-              }
+              streaming={busy && message.role === 'assistant' && index === displayed.length - 1}
             />
           ))
         ) : (

@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai';
+import type { Injection } from '../agent/interleave';
 
 export type RunStatus =
   | 'idle'
@@ -69,6 +70,8 @@ export interface RunRecord {
   endedAt?: number;
   error?: string;
   queued: string[];
+  /** Queued messages the agent consumed, with the step they were inserted at. */
+  injected?: Injection[];
   model?: Pick<ModelSettings, 'provider' | 'baseURL' | 'model' | 'supportsImages'>;
   finishReason?: string;
   steps?: {

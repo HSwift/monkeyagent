@@ -24,6 +24,7 @@ import { INSTRUCTIONS } from '../agent/prompt';
 import { API_DOCS } from '../workspace/docs';
 import { buildDebugPack, type DebugPackTool } from '../debug/export';
 import { normalizeMessageIds, toolInputHint } from '../agent/messages';
+import { applyInjections, interleave } from '../agent/interleave';
 import { AgentError, SerialQueue, errorData, sleep } from '../protocol/errors';
 import type {
   ModelSettings,
@@ -66,7 +67,6 @@ export class Controller {
   private onTabUpdated = (id: number, change: chrome.tabs.OnUpdatedInfo) => {
     if (id === this.tabId && change.url) void this.syncTarget(change.url).catch(() => {});
   };
-  private consumed: UIMessage[] = [];
   constructor(
     public tabId: number,
     private adapter: ScriptStoreAdapter,
@@ -483,7 +483,6 @@ export class Controller {
     this.messages = [];
     this.fileTools.reset();
     this.run = undefined;
-    this.consumed = [];
     this.chunks = [];
     this.activeStream = undefined;
     this.error = undefined;
@@ -494,7 +493,6 @@ export class Controller {
     const abort = (this.abort = new AbortController());
     this.messages = [...messages];
     this.error = undefined;
-    this.consumed = [];
     this.run = {
       id: crypto.randomUUID(),
       workspaceId: this.workspace.id,
@@ -503,6 +501,7 @@ export class Controller {
       startedAt: Date.now(),
       status: 'generating',
       queued: [],
+      injected: [],
       steps: [],
     };
     let failed = false;
@@ -544,6 +543,16 @@ export class Controller {
           this.repl.run(code, timeout, this.operationSignal ?? signal),
       });
       let steps = 0;
+      const injected = this.run.injected!;
+      let assistant: UIMessage | undefined;
+      // Queued user messages are shown where the agent consumed them, splitting the reply.
+      const compose = () => {
+        this.messages = [...messages, ...interleave(assistant, injected)];
+      };
+      const modelMessages = await convertToModelMessages(messages, {
+        tools,
+        ignoreIncompleteToolCalls: true,
+      });
       const agent = new ToolLoopAgent({
         model: createModel(settings),
         tools,
@@ -552,29 +561,20 @@ export class Controller {
         toolCallConcurrency: 1,
         maxRetries: 1,
         instructions: await this.buildInstructions(settings.supportsImages),
-        prepareStep: async ({ messages: stepMessages }) => {
+        prepareStep: async ({ messages: stepMessages, stepNumber }) => {
           this.run!.status = 'generating';
           const queued = this.run!.queued.splice(0);
-          this.consumed.push(
-            ...queued.map((text) => ({
-              id: crypto.randomUUID(),
-              role: 'user' as const,
-              parts: [{ type: 'text' as const, text }],
-            })),
-          );
-          for (const message of this.consumed)
-            if (!this.messages.some((existing) => existing.id === message.id))
-              this.messages.push(message);
+          for (const text of queued)
+            injected.push({ id: crypto.randomUUID(), text, step: stepNumber, at: stepMessages.length });
+          compose();
           await this.persistMessages();
           await this.saveRun();
-          return queued.length
-            ? {
-                messages: [
-                  ...stepMessages,
-                  ...queued.map((content) => ({ role: 'user' as const, content })),
-                ],
-              }
-            : {};
+          if (!injected.length) return {};
+          const toMessage = (content: string) => ({ role: 'user' as const, content });
+          // If this SDK version already carried earlier injections forward, only add new ones.
+          if (stepMessages.slice(modelMessages.length).some((message) => message.role === 'user'))
+            return queued.length ? { messages: [...stepMessages, ...queued.map(toMessage)] } : {};
+          return { messages: applyInjections(stepMessages, injected, toMessage) };
         },
         onStepEnd: async (step) => {
           steps++;
@@ -590,10 +590,7 @@ export class Controller {
         },
       });
       const result = await agent.stream({
-        messages: await convertToModelMessages(messages, {
-          tools,
-          ignoreIncompleteToolCalls: true,
-        }),
+        messages: modelMessages,
         abortSignal: abort.signal,
       });
       const stream = result.toUIMessageStream({
@@ -623,7 +620,8 @@ export class Controller {
           this.error ??= errorData(error).message;
         },
       })) {
-        this.messages = [...messages, message, ...this.consumed];
+        assistant = message;
+        compose();
         await this.persistMessages();
         this.publish();
       }
@@ -649,9 +647,7 @@ export class Controller {
         data: this.error,
       });
     } finally {
-      for (const message of this.consumed)
-        if (!this.messages.some((existing) => existing.id === message.id))
-          this.messages.push(message);
+      // this.messages already includes consumed messages: compose() runs on every injection.
       this.run.endedAt = Date.now();
       try {
         await this.persistMessages();
