@@ -15,6 +15,7 @@
   --danger: #b91c1c;
   --selection: #a3a3a344;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --page-gutter: 24px;
   color: var(--text);
   background: var(--surface);
 }
@@ -352,9 +353,7 @@ strong {
 }
 .conversation-content {
   width: 100%;
-  max-width: 768px;
-  margin: auto;
-  padding: 32px 24px 12px;
+  padding: 32px var(--page-gutter) 12px;
   min-height: 100%;
 }
 .scroll-bottom {
@@ -377,7 +376,7 @@ strong {
 }
 .is-empty .conversation-content {
   min-height: 0;
-  padding: 0 24px;
+  padding-block: 0;
 }
 .chat-empty {
   text-align: center;
@@ -397,8 +396,7 @@ strong {
   margin: 0 0 8px;
 }
 .composer-area {
-  width: calc(100% - 48px);
-  max-width: 720px;
+  width: calc(100% - 2 * var(--page-gutter));
   margin: 0 auto 24px;
   flex-shrink: 0;
 }
@@ -1446,6 +1444,9 @@ strong {
   }
 }
 @media (max-width: 720px) {
+  :root {
+    --page-gutter: 16px;
+  }
   .app-header {
     padding: 0 10px;
     gap: 8px;
@@ -1463,17 +1464,31 @@ strong {
     padding-inline: 6px;
   }
   .composer-area {
-    width: calc(100% - 32px);
     margin-bottom: 16px;
   }
   .conversation-content {
-    padding: 24px 16px 12px;
+    padding-top: 24px;
   }
   .file-tree {
     width: 110px;
   }
   .repl-toolbar > span {
     font-size: 8px;
+  }
+}
+@media (min-width: 1024px) {
+  :root {
+    --page-gutter: 40px;
+  }
+}
+@media (min-width: 1440px) {
+  :root {
+    --page-gutter: 64px;
+  }
+}
+@media (min-width: 1920px) {
+  :root {
+    --page-gutter: 96px;
   }
 }
 @media (max-height: 420px) {
