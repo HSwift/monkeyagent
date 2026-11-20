@@ -1325,6 +1325,14 @@ strong {
   justify-content: flex-end;
   gap: 7px;
 }
+.file-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
 .error-banner {
   display: flex;
   gap: 8px;

@@ -132,3 +132,107 @@ test('fixture panel edits files, saves model settings, runs native browser REPL 
     await context.close();
   }
 });
+
+test('New file uploads local text, preserves existing files and restores uploads after reload', async () => {
+  const extension = new URL('../../fixtures/extension/', import.meta.url).pathname;
+  const context = await chromium.launchPersistentContext('', {
+    channel: 'chromium',
+    headless: true,
+    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+  });
+  try {
+    await routeExampleSite(context);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
+    const target = context.pages()[0];
+    await target.goto('https://example.com/');
+    const tabs = await worker.evaluate(() => chrome.tabs.query({}));
+    const tabId = tabs.find((tab) => tab.url === 'https://example.com/')!.id;
+    const page = await context.newPage();
+    await page.goto(worker.url().replace('fixture.js', `devtools.html?tabId=${tabId}`));
+    const panel = page.frameLocator('iframe');
+    await panel.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'Upload file', exact: true })).toHaveCount(0);
+    await panel.getByRole('button', { name: 'New file', exact: true }).last().click();
+    const dialog = panel.getByRole('dialog', { name: 'New workspace file', exact: true });
+    const picker = dialog.getByRole('button', { name: 'Upload file', exact: true });
+    const upload = dialog.getByRole('button', { name: 'Upload', exact: true });
+    await expect(dialog.getByRole('button', { name: 'Confirm', exact: true })).toBeEnabled();
+    const [pickerBounds, formBounds, actionsBounds] = await Promise.all([
+      picker.boundingBox(),
+      dialog.locator('form').boundingBox(),
+      dialog.locator('.form-actions').boundingBox(),
+    ]);
+    expect(pickerBounds!.width).toBeCloseTo(formBounds!.width, 0);
+    expect(pickerBounds!.y).toBeGreaterThan(actionsBounds!.y + actionsBounds!.height);
+    const content = '// 本地上传\nconsole.log("uploaded");\n';
+    const source = {
+      name: 'local.user.js',
+      mimeType: 'text/javascript',
+      buffer: Buffer.from(content),
+    };
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), picker.click()]);
+    await chooser.setFiles(source);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel('File path')).toHaveValue('/workspace/local.user.js');
+    await dialog.getByLabel('File path').fill('/workspace/uploads/example.user.js');
+    await upload.click();
+    await expect(dialog).toBeHidden();
+    const editor = panel.getByRole('textbox', { name: 'Code editor', exact: true });
+    await expect(editor).toContainText('// 本地上传');
+    await expect(editor).toContainText('console.log("uploaded");');
+    await expect(panel.getByRole('button', { name: 'example.user.js', exact: true })).toBeVisible();
+
+    await page.reload();
+    await panel.getByRole('button', { name: 'Files', exact: true }).click();
+    await expect(editor).toContainText('console.log("uploaded");');
+    await panel.getByRole('button', { name: 'New file', exact: true }).click();
+    await dialog.getByLabel('Local file').setInputFiles({
+      ...source,
+      buffer: Buffer.from('replacement'),
+    });
+    await dialog.getByLabel('File path').fill('/workspace/uploads/example.user.js');
+    await upload.click();
+    await expect(dialog.getByRole('alert')).toContainText('A file already exists at this path.');
+    await dialog.getByLabel('File path').fill('/workspace/copy.user.js');
+    await upload.click();
+    await expect(dialog).toBeHidden();
+    await expect(editor).toContainText('replacement');
+    await panel.getByRole('button', { name: 'example.user.js', exact: true }).click();
+    await expect(editor).toContainText('console.log("uploaded");');
+
+    for (const [name, buffer, message] of [
+      ['binary.dat', Buffer.from([0, 1, 2]), 'Choose a UTF-8 text file.'],
+      ['invalid.txt', Buffer.from([0xff]), 'Choose a UTF-8 text file.'],
+      ['large.txt', Buffer.alloc(2 * 1024 * 1024 + 1, 'a'), 'Text files are limited to 2 MiB.'],
+    ] as const) {
+      await panel.getByRole('button', { name: 'New file', exact: true }).click();
+      await dialog.getByLabel('Local file').setInputFiles({ name, mimeType: '', buffer });
+      await upload.click();
+      await expect(dialog.getByRole('alert')).toContainText(message);
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(panel.locator('button.tree-file')).toHaveCount(2);
+    }
+    await panel.getByRole('button', { name: 'New file', exact: true }).click();
+    await dialog.getByLabel('Local file').setInputFiles({
+      name: 'empty.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.alloc(0),
+    });
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(panel.getByRole('button', { name: 'empty.txt', exact: true })).toHaveCount(0);
+    await panel.getByRole('button', { name: 'New file', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'Confirm', exact: true })).toBeEnabled();
+    await expect(upload).toHaveCount(0);
+    await dialog.getByLabel('Local file').setInputFiles({
+      name: 'empty.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.alloc(0),
+    });
+    await upload.click();
+    await expect(dialog).toBeHidden();
+    await expect(panel.getByRole('button', { name: 'empty.txt', exact: true })).toBeVisible();
+    await expect(editor).toHaveText('');
+  } finally {
+    await context.close();
+  }
+});

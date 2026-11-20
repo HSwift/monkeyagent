@@ -8,6 +8,7 @@ import {
   Pencil,
   Trash2,
   Download,
+  Upload,
   Play,
   RotateCcw,
   X,
@@ -52,11 +53,13 @@ export function WorkspacePane({
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const [dialog, setDialog] = useState<'new' | 'rename' | 'delete' | 'import' | null>(null);
   const [path, setPath] = useState('/workspace/main.user.js');
+  const [upload, setUpload] = useState<File | null>(null);
   const [scripts, setScripts] = useState<ScriptSummary[]>([]);
   const [scriptId, setScriptId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const closeButton = useRef<HTMLButtonElement>(null);
+  const uploadInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // The entrance animation starts offscreen; focusing must not scroll its parent.
     if (open) closeButton.current?.focus({ preventScroll: true });
@@ -67,8 +70,20 @@ export function WorkspacePane({
     setError('');
     try {
       if (dialog === 'new') {
-        await client.call('files.write', path, '');
-        selectFile(path);
+        let content = '';
+        if (upload) {
+          if (upload.size > 2 * 1024 * 1024) throw new Error('Text files are limited to 2 MiB.');
+          const data = await upload.arrayBuffer();
+          try {
+            content = new TextDecoder('utf-8', { fatal: true }).decode(data);
+          } catch {
+            throw new Error('Choose a UTF-8 text file. Binary files are not supported.');
+          }
+          if (content.includes('\0'))
+            throw new Error('Choose a UTF-8 text file. Binary files are not supported.');
+        }
+        const created = await client.call<FileRecord>('files.write', path, content);
+        selectFile(created.path);
       }
       if (dialog === 'rename' && file) {
         const renamed = await client.call<FileRecord>(
@@ -102,7 +117,11 @@ export function WorkspacePane({
       setDialog(null);
       setView('files');
     } catch (error) {
-      setError((error as Error).message);
+      setError(
+        dialog === 'new' && (error as { code?: string }).code === 'conflict'
+          ? 'A file already exists at this path. Choose a different file path.'
+          : (error as Error).message,
+      );
     } finally {
       setBusy(false);
     }
@@ -110,6 +129,7 @@ export function WorkspacePane({
   function openDialog(value: typeof dialog) {
     setError('');
     setDialog(value);
+    setUpload(null);
     setPath(value === 'rename' ? selectedPath : '/workspace/main.user.js');
     if (value === 'import')
       client
@@ -242,7 +262,9 @@ export function WorkspacePane({
               <div className="empty-workspace">
                 <FileCode2 size={30} />
                 <h3>Start with a script</h3>
-                <p>Ask the Agent to create a file, or import an existing script to edit.</p>
+                <p>
+                  Ask the Agent to create a file, upload a local file, or import an existing script.
+                </p>
                 <div className="inline-actions">
                   <Button onClick={() => openDialog('new')}>
                     <Plus size={14} />
@@ -277,7 +299,7 @@ export function WorkspacePane({
       <Modal
         open={!!dialog}
         onOpenChange={(open) => {
-          if (!open) setDialog(null);
+          if (!open && !busy) setDialog(null);
         }}
         title={
           dialog === 'new'
@@ -318,6 +340,7 @@ export function WorkspacePane({
               <input
                 autoFocus
                 value={path}
+                disabled={busy}
                 onChange={(event) => setPath(event.target.value)}
                 placeholder="/workspace/main.user.js"
                 required
@@ -332,15 +355,48 @@ export function WorkspacePane({
             </div>
           )}
           <div className="form-actions">
-            <Button onClick={() => setDialog(null)}>Cancel</Button>
+            <Button onClick={() => setDialog(null)} disabled={busy}>
+              Cancel
+            </Button>
             <Button
               type="submit"
               variant={dialog === 'delete' ? 'danger' : 'primary'}
               disabled={busy || (dialog === 'import' && !scriptId)}
             >
-              {busy ? 'Working…' : dialog === 'delete' ? 'Delete file' : 'Confirm'}
+              {busy
+                ? 'Working…'
+                : dialog === 'delete'
+                  ? 'Delete file'
+                  : dialog === 'new' && upload
+                    ? 'Upload'
+                    : 'Confirm'}
             </Button>
           </div>
+          {dialog === 'new' && (
+            <div className="file-upload">
+              <input
+                ref={uploadInput}
+                type="file"
+                aria-label="Local file"
+                hidden
+                disabled={busy}
+                onChange={(event) => {
+                  const selected = event.target.files?.[0];
+                  if (!selected) return;
+                  setUpload(selected);
+                  setPath(`/workspace/${selected.name}`);
+                  setError('');
+                  event.target.value = '';
+                }}
+              />
+              <Button onClick={() => uploadInput.current?.click()} disabled={busy}>
+                <Upload size={14} />
+                Upload file
+              </Button>
+              {upload && <span className="small">{upload.name}</span>}
+              <span className="muted small">UTF-8 text files up to 2 MiB.</span>
+            </div>
+          )}
         </form>
       </Modal>
     </section>
