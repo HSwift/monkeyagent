@@ -236,6 +236,7 @@ describe('buildDebugPack', () => {
     expect(JSON.parse(text(entries.get('settings.json')))).toMatchObject({
       model: 'm1',
       apiKeyConfigured: true,
+      autoCompactTokenLimit: 64000,
     });
 
     const everything = [...entries.values()].map(text).join('\n');

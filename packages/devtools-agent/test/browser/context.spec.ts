@@ -59,6 +59,7 @@ test('clearing context persists, preserves the workspace and excludes old messag
       apiKey: 'context-test-key',
       supportsImages: false,
       theme: 'light',
+      autoCompactTokenLimit: 64000,
     };
     await rpc(frame, 'settings.save', settings);
     const file = await rpc(

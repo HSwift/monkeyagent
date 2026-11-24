@@ -115,6 +115,26 @@ export function Settings({
             placeholder="Stored locally in this extension"
           />
         </label>
+        <label>
+          Auto-compact threshold (tokens)
+          <input
+            type="number"
+            min="0"
+            step="1"
+            required
+            value={settings.autoCompactTokenLimit ?? ''}
+            onChange={(event) =>
+              change(
+                'autoCompactTokenLimit',
+                event.target.value === '' ? undefined : event.target.valueAsNumber,
+              )
+            }
+          />
+          <span className="muted small">
+            Estimated total input budget. Default 64000; 0 disables. Set below your model's context
+            limit to leave room for replies and summarization.
+          </span>
+        </label>
         <label className="checkbox-label">
           <input
             type="checkbox"

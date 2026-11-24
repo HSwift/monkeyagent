@@ -463,7 +463,22 @@ function ChatArea({
       <div className="composer-area">
         {snapshot.run && (
           <div className={`run-status run-${snapshot.run.status}`} role="status">
-            <span>{STATUS_LABELS[snapshot.run.status]}</span>
+            <span>
+              {snapshot.run.compaction?.status === 'running'
+                ? 'Compacting context…'
+                : STATUS_LABELS[snapshot.run.status]}
+            </span>
+            {snapshot.run.compaction?.status === 'completed' && (
+              <span className="muted small">
+                Context {snapshot.run.compaction.beforeTokens} →{' '}
+                {snapshot.run.compaction.afterTokens} tokens (estimated)
+              </span>
+            )}
+            {snapshot.run.compaction?.status === 'failed' && (
+              <span className="muted small" title={snapshot.run.compaction.error}>
+                Context summary failed; original context retained
+              </span>
+            )}
             {snapshot.run.status === 'limit_reached' && (
               <Button
                 variant="ghost"

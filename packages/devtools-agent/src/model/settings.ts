@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: ModelSettings = {
   apiKey: '',
   supportsImages: false,
   theme: 'system',
+  autoCompactTokenLimit: 64000,
 };
 export async function loadSettings(): Promise<ModelSettings> {
   if (!globalThis.chrome?.storage?.local)
@@ -38,6 +39,15 @@ export function validateSettings(settings: ModelSettings) {
       'API URL must be an HTTP(S) base URL without credentials, query or fragment.',
     );
   if (!settings.model.trim()) throw new AgentError('invalid_settings', 'Model name is required.');
+  const limit = settings.autoCompactTokenLimit;
+  if (
+    limit !== undefined &&
+    (!Number.isSafeInteger(limit) || limit < 0 || (limit > 0 && limit < 1024))
+  )
+    throw new AgentError(
+      'invalid_settings',
+      'Auto-compact threshold must be 0 (disabled) or an integer of at least 1024 tokens.',
+    );
 }
 export function createModel(settings: ModelSettings) {
   validateSettings(settings);

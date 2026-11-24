@@ -37,7 +37,11 @@ export function interleave(
     const parts = assistant.parts.slice(from, to);
     from = to;
     if (!parts.some((part) => part.type !== 'step-start')) return;
-    result.push({ ...assistant, id: segments ? `${assistant.id}-${segments}` : assistant.id, parts });
+    result.push({
+      ...assistant,
+      id: segments ? `${assistant.id}-${segments}` : assistant.id,
+      parts,
+    });
     segments++;
   };
   // Stable sort keeps the queue order for messages consumed at the same step.
@@ -51,10 +55,9 @@ export function interleave(
 }
 
 /**
- * Re-inserts consumed user messages into a step's model input. The SDK rebuilds each step's input
- * from the initial messages plus response messages, so a message returned by one prepareStep would
- * otherwise be forgotten by later steps. `at` indices refer to the un-injected input, which only
- * grows by appending, so they stay valid.
+ * Re-inserts consumed user messages into the original model transcript reconstructed by the
+ * controller from initial and response messages, before context compaction. `at` indices refer
+ * to this un-injected input, which only grows by appending, so they stay valid.
  */
 export function applyInjections<M extends { role: string }>(
   stepMessages: readonly M[],
@@ -64,7 +67,11 @@ export function applyInjections<M extends { role: string }>(
   const result = [...stepMessages];
   let offset = 0;
   for (const injection of [...injections].sort((a, b) => a.at - b.at)) {
-    result.splice(Math.min(injection.at, stepMessages.length) + offset, 0, toMessage(injection.text));
+    result.splice(
+      Math.min(injection.at, stepMessages.length) + offset,
+      0,
+      toMessage(injection.text),
+    );
     offset++;
   }
   return result;

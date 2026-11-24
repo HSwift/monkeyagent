@@ -1,5 +1,7 @@
 import {
   ToolLoopAgent,
+  asSchema,
+  generateText,
   convertToModelMessages,
   readUIMessageStream,
   InvalidToolInputError,
@@ -31,6 +33,7 @@ import { API_DOCS } from '../workspace/docs';
 import { buildDebugPack, type DebugPackTool } from '../debug/export';
 import { normalizeMessageIds, toolInputHint } from '../agent/messages';
 import { applyInjections, interleave } from '../agent/interleave';
+import { ContextCompactor, COMPACTION_PROMPT, applyContextCheckpoint } from '../agent/context';
 import { AgentError, SerialQueue, errorData, sleep } from '../protocol/errors';
 import type {
   ModelSettings,
@@ -483,6 +486,7 @@ export class Controller {
       ...session,
       conversationId,
       title: DEFAULT_SESSION_TITLE,
+      context: undefined,
       updatedAt: Date.now(),
     });
     await tx.objectStore('conversations').put({ id: this.session.id, messages: [] });
@@ -532,6 +536,7 @@ export class Controller {
         baseURL: settings.baseURL,
         model: settings.model,
         supportsImages: settings.supportsImages,
+        autoCompactTokenLimit: settings.autoCompactTokenLimit ?? 64000,
       };
       const target = await chrome.tabs.get(this.tabId);
       const targetUrl = target.url ?? this.targetUrl;
@@ -562,8 +567,40 @@ export class Controller {
         tools,
         ignoreIncompleteToolCalls: true,
       });
+      const model = createModel(settings);
+      const instructions = await this.buildInstructions(settings.supportsImages);
+      const toolDefinitions = await Promise.all(
+        ACTIVE_TOOLS.map(async (name) => ({
+          name,
+          description: tools[name].description,
+          schema: await asSchema<unknown>(tools[name].inputSchema!).jsonSchema,
+        })),
+      );
+      const session = this.session;
+      const conversationId = this.conversationId;
+      const context = new ContextCompactor({
+        limit: settings.autoCompactTokenLimit ?? 64000,
+        overhead: { instructions, tools: toolDefinitions },
+        checkpoint: (await session.metadata()).context,
+        summarize: async (transcript, maxOutputTokens, signal) => {
+          const result = await generateText({
+            model,
+            system: COMPACTION_PROMPT,
+            prompt: transcript,
+            maxOutputTokens,
+            maxRetries: 0,
+            abortSignal: signal,
+          });
+          return result.text;
+        },
+        save: (checkpoint) => session.saveContext(checkpoint, conversationId),
+        status: async (status) => {
+          this.run!.compaction = status;
+          await this.saveRun();
+        },
+      });
       const agent = new ToolLoopAgent({
-        model: createModel(settings),
+        model,
         tools,
         activeTools: [...ACTIVE_TOOLS],
         // No step cap: the loop ends when the model stops calling tools, or when the user stops it.
@@ -571,23 +608,40 @@ export class Controller {
         stopWhen: () => false,
         toolCallConcurrency: 1,
         maxRetries: 1,
-        instructions: await this.buildInstructions(settings.supportsImages),
-        prepareStep: async ({ messages: stepMessages, stepNumber }) => {
+        instructions,
+        prepareStep: async ({ initialMessages, responseMessages, stepNumber }) => {
           this.run!.status = 'generating';
-          const queued = this.run!.queued.splice(0);
-          for (const text of queued)
-            injected.push({ id: crypto.randomUUID(), text, step: stepNumber, at: stepMessages.length });
+          // SDK message overrides carry forward. Always derive checkpoint boundaries from
+          // the original transcript, rather than summarizing an already shortened view.
+          const stepMessages = [...initialMessages, ...responseMessages];
+          const consumeQueued = () => {
+            const queued = this.run!.queued.splice(0);
+            for (const text of queued)
+              injected.push({
+                id: crypto.randomUUID(),
+                text,
+                step: stepNumber,
+                at: stepMessages.length,
+              });
+            return queued;
+          };
+          consumeQueued();
           compose();
           await this.persistMessages();
           await this.saveRun();
-          if (!injected.length) return {};
           const toMessage = (content: string) => ({ role: 'user' as const, content });
-          // If this SDK version already carried earlier injections forward, only add new ones.
-          if (stepMessages.slice(modelMessages.length).some((message) => message.role === 'user'))
-            return queued.length ? { messages: [...stepMessages, ...queued.map(toMessage)] } : {};
-          return { messages: applyInjections(stepMessages, injected, toMessage) };
+          const input = applyInjections(stepMessages, injected, toMessage);
+          const prepared = await context.prepare(input, abort.signal);
+          const lateQueued = consumeQueued();
+          if (lateQueued.length) {
+            compose();
+            await this.persistMessages();
+            await this.saveRun();
+          }
+          return { messages: [...prepared, ...lateQueued.map(toMessage)] };
         },
         onStepEnd: async (step) => {
+          context.observe(step.usage.inputTokens);
           steps++;
           this.run!.steps!.push({
             index: steps,
@@ -695,10 +749,13 @@ export class Controller {
     const messages = normalizeMessageIds(this.messages);
     let modelMessages: unknown;
     try {
-      modelMessages = await convertToModelMessages(messages, {
-        tools,
-        ignoreIncompleteToolCalls: true,
-      });
+      modelMessages = await applyContextCheckpoint(
+        await convertToModelMessages(messages, {
+          tools,
+          ignoreIncompleteToolCalls: true,
+        }),
+        (await this.session.metadata()).context,
+      );
     } catch (error) {
       modelMessages = { error: errorData(error).message };
     }

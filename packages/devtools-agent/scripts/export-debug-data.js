@@ -102,6 +102,7 @@
     configurationAtExport: {
       provider: settings.provider, baseURL: settings.baseURL, model: settings.model,
       supportsImages: settings.supportsImages,
+      autoCompactTokenLimit: settings.autoCompactTokenLimit ?? 64000,
     },
     ...records,
     limitations: [

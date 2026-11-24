@@ -60,6 +60,21 @@ export interface SessionRecord {
   targetTabId?: number;
   updatedAt: number;
   baseline: Record<string, string>;
+  context?: ContextCheckpoint;
+}
+export interface ContextCheckpoint {
+  summary: string;
+  coveredMessages: number;
+  prefixHash: string;
+  createdAt: number;
+  beforeTokens: number;
+  afterTokens: number;
+}
+export interface CompactionStatus {
+  status: 'running' | 'completed' | 'failed' | 'interrupted';
+  beforeTokens: number;
+  afterTokens?: number;
+  error?: string;
 }
 export interface RunRecord {
   id: string;
@@ -73,8 +88,12 @@ export interface RunRecord {
   queued: string[];
   /** Queued messages the agent consumed, with the step they were inserted at. */
   injected?: Injection[];
-  model?: Pick<ModelSettings, 'provider' | 'baseURL' | 'model' | 'supportsImages'>;
+  model?: Pick<
+    ModelSettings,
+    'provider' | 'baseURL' | 'model' | 'supportsImages' | 'autoCompactTokenLimit'
+  >;
   finishReason?: string;
+  compaction?: CompactionStatus;
   steps?: {
     index: number;
     endedAt: number;
@@ -122,6 +141,7 @@ export interface ModelSettings {
   apiKey: string;
   supportsImages: boolean;
   theme: 'system' | 'light' | 'dark';
+  autoCompactTokenLimit?: number;
 }
 export interface Snapshot {
   workspace: WorkspaceRecord;

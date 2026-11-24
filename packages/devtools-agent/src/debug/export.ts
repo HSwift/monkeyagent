@@ -210,6 +210,7 @@ export async function buildDebugPack(input: DebugPackInput): Promise<DebugPack> 
     baseURL: input.settings.baseURL,
     model: input.settings.model,
     supportsImages: input.settings.supportsImages,
+    autoCompactTokenLimit: input.settings.autoCompactTokenLimit ?? 64000,
     apiKeyConfigured: !!input.settings.apiKey,
   };
 
