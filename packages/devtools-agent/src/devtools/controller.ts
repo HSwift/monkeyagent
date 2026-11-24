@@ -381,7 +381,7 @@ export class Controller {
       case 'files.remove':
         return this.workspace.remove(...(args as [string, string]));
       case 'files.read':
-        return this.workspace.read(args[0] as string);
+        return this.workspace.read(...(args as [string, { offset?: number; limit?: number }?]));
       case 'files.baseline': {
         const [path, mode] = args as [string, string];
         if (mode === 'installed')

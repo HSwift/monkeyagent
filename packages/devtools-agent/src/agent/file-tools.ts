@@ -3,6 +3,7 @@ import { RE2JS } from 're2js';
 import { AgentError } from '../protocol/errors';
 import { WorkspaceService, fileSummary, normalizePath } from '../workspace/service';
 import type { FileRecord } from '../protocol/types';
+import { SOURCE_SCAN_BYTES } from '../workspace/source';
 
 export interface GrepInput {
   pattern: string;
@@ -17,9 +18,101 @@ export interface GrepInput {
   '-B'?: number;
   '-C'?: number;
   context?: number;
+  char_context?: number;
   head_limit?: number;
   offset?: number;
   multiline?: boolean;
+}
+
+interface GrepEntry {
+  file_path: string;
+  line?: number;
+  text?: string;
+  count?: number;
+  is_match?: boolean;
+  revision?: string;
+  offset?: number;
+  window_start?: number;
+  match_length?: number;
+  truncated?: boolean;
+}
+
+interface GrepResult {
+  search_complete?: boolean;
+  scanned_bytes?: number;
+  skipped_count?: number;
+  skipped?: { file_path: string; reason: string }[];
+  output_mode: NonNullable<GrepInput['output_mode']>;
+  output_mode_detail?: 'char_window';
+  results: GrepEntry[];
+  total_matches: number;
+  total_results: number;
+  truncated: boolean;
+  next_offset?: number;
+  truncation_reason?: 'output_budget' | 'head_limit';
+  message?: string;
+}
+
+const WINDOW_OUTPUT_BYTES = 16 * 1024;
+const WINDOW_ENTRY_BYTES = WINDOW_OUTPUT_BYTES - 1024; // Reserve the result envelope and tool metadata.
+const WINDOW_TEXT_CHARS = 4000;
+const utf8 = new TextEncoder();
+
+function characterWindow(file: FileRecord, start: number, end: number, context: number) {
+  const desiredStart = Math.max(0, start - context);
+  const desiredEnd = Math.min(file.content.length, end + context);
+  const makeEntry = (maxChars: number) => {
+    const length = Math.min(desiredEnd - desiredStart, maxChars);
+    const before = Math.min(
+      start - desiredStart,
+      Math.floor((length - Math.min(end - start, length)) / 2),
+    );
+    const windowStart = Math.max(desiredStart, Math.min(start - before, desiredEnd - length));
+    const windowEnd = windowStart + length;
+    return {
+      file_path: file.path,
+      revision: file.revision,
+      offset: start,
+      window_start: windowStart,
+      match_length: end - start,
+      text: file.content.slice(windowStart, windowEnd),
+      is_match: true,
+      truncated: windowStart > desiredStart || windowEnd < desiredEnd,
+    };
+  };
+  let entry = makeEntry(WINDOW_TEXT_CHARS);
+  let bytes = utf8.encode(JSON.stringify(entry)).length;
+  if (bytes > WINDOW_ENTRY_BYTES) {
+    let low = end > start ? 1 : 0;
+    let high = entry.text.length;
+    if (utf8.encode(JSON.stringify(makeEntry(low))).length > WINDOW_ENTRY_BYTES)
+      throw new AgentError(
+        'size_limit',
+        'The match metadata exceeds the character-window output budget.',
+      );
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (utf8.encode(JSON.stringify(makeEntry(middle))).length <= WINDOW_ENTRY_BYTES) low = middle;
+      else high = middle - 1;
+    }
+    entry = makeEntry(low);
+    bytes = utf8.encode(JSON.stringify(entry)).length;
+  }
+  return { entry, bytes };
+}
+
+function* searchChunks(content: string, multiline: boolean) {
+  if (multiline) {
+    yield { text: content, offset: 0 };
+    return;
+  }
+  let offset = 0;
+  for (;;) {
+    const newline = content.indexOf('\n', offset);
+    yield { text: content.slice(offset, newline < 0 ? content.length : newline), offset };
+    if (newline < 0) return;
+    offset = newline + 1;
+  }
 }
 
 /** Familiar file tools; optimistic revisions stay inside the harness rather than model inputs. */
@@ -30,7 +123,8 @@ export class FileTools {
     this.observed.clear();
   }
   async read(input: { file_path: string; offset?: number; limit?: number }) {
-    const file = await this.workspace.read(input.file_path);
+    const path = normalizePath(input.file_path);
+    const file = await this.workspace.readForSearch(path);
     const lines = file.content.split('\n');
     const offset = input.offset ?? 1;
     const limit = input.limit ?? 2000;
@@ -50,6 +144,7 @@ export class FileTools {
     return {
       file_path: file.path,
       revision: file.revision,
+      ...('sourceUrl' in file ? { sourceUrl: file.sourceUrl } : {}),
       offset,
       total_lines: lines.length,
       content: rendered.join('\n'),
@@ -60,12 +155,23 @@ export class FileTools {
       ...(shortenedLine
         ? {
             notice:
-              'Lines above 2000 characters are shortened. Use fs.read(path,{offset,limit}) for character ranges.',
+              'Lines above 2000 characters are shortened. Use Grep with output_mode:"content",char_context:200 for match windows, or fs.read(path,{offset,limit}) for character ranges.',
           }
         : {}),
     };
   }
   private async current(path: string): Promise<FileRecord> {
+    path = normalizePath(path);
+    if (path === '/artifacts' || path.startsWith('/artifacts/'))
+      throw new AgentError(
+        'read_only',
+        'Tool-result artifacts are read-only. Copy data to /workspace/ before editing.',
+      );
+    if (path === '/source' || path.startsWith('/source/'))
+      throw new AgentError(
+        'read_only',
+        'Page sources are read-only. Copy source to /workspace/ before editing.',
+      );
     const file = await this.workspace.read(path);
     const revision = this.observed.get(file.path);
     if (!revision)
@@ -147,7 +253,30 @@ export class FileTools {
       truncated: matches.length > 1000,
     };
   }
-  async grep(input: GrepInput, signal?: AbortSignal) {
+  async grep(input: GrepInput, signal?: AbortSignal): Promise<GrepResult> {
+    const mode = input.output_mode ?? 'files_with_matches';
+    if (input.char_context !== undefined) {
+      if (
+        !Number.isInteger(input.char_context) ||
+        input.char_context < 0 ||
+        input.char_context > 2000
+      )
+        throw new AgentError(
+          'invalid_input',
+          'char_context must be an integer between 0 and 2000.',
+        );
+      if (mode !== 'content')
+        throw new AgentError('invalid_input', 'char_context requires output_mode:"content".');
+      if (
+        ['-o', '-A', '-B', '-C', 'context'].some(
+          (key) => input[key as keyof GrepInput] !== undefined,
+        )
+      )
+        throw new AgentError(
+          'invalid_input',
+          'char_context cannot be combined with -o, -A, -B, -C or context.',
+        );
+    }
     const { root, files } = await this.candidates(input.path);
     const extensions: Record<string, string> = {
       js: '**/*.{js,jsx,mjs,cjs}',
@@ -177,22 +306,30 @@ export class FileTools {
     }
     const glob = input.glob ? picomatch(input.glob, { dot: true, maxLength: 1024 }) : undefined;
     const type = input.type ? picomatch(extensions[input.type], { dot: true }) : undefined;
-    const entries: {
-      file_path: string;
-      line?: number;
-      text?: string;
-      count?: number;
-      is_match?: boolean;
-    }[] = [];
-    const mode = input.output_mode ?? 'files_with_matches';
+    const accepts = (item: { path: string }) => {
+      const relative = item.path.slice(root.length + 1) || item.path.split('/').pop()!;
+      const name = item.path.split('/').pop()!;
+      return (!glob || glob(relative) || glob(name)) && (!type || type(relative) || type(name));
+    };
+    const scan = this.sourceScan(signal, root === '/source' || root.startsWith('/source/'));
+    if (input.char_context !== undefined) {
+      const result = await this.grepCharacterWindows(
+        input,
+        files.filter(accepts),
+        regex,
+        input.char_context,
+        signal,
+        scan.read,
+      );
+      return { ...result, ...scan.report() };
+    }
+    const entries: GrepEntry[] = [];
     let total = 0;
     for (const item of files) {
       signal?.throwIfAborted();
-      const relative = item.path.slice(root.length + 1) || item.path.split('/').pop()!;
-      const name = item.path.split('/').pop()!;
-      if ((glob && !glob(relative) && !glob(name)) || (type && !type(relative) && !type(name)))
-        continue;
-      const file = await this.workspace.read(item.path);
+      if (!accepts(item)) continue;
+      const file = await scan.read(item.path, false);
+      if (!file) continue;
       const lines = file.content.split('\n');
       const matched = new Map<number, string>();
       if (input.multiline) {
@@ -249,9 +386,140 @@ export class FileTools {
       total_matches: total,
       total_results: entries.length,
       truncated: offset + limit < entries.length,
+      ...scan.report(),
       ...(offset >= entries.length && total > 0
         ? { message: 'No entries at this offset. Reset or reduce offset; the pattern does match.' }
         : {}),
+    };
+  }
+
+  private async grepCharacterWindows(
+    input: GrepInput,
+    files: { path: string }[],
+    regex: RE2JS,
+    context: number,
+    signal?: AbortSignal,
+    read: (path: string, full: boolean) => Promise<FileRecord | undefined> = (path) =>
+      this.workspace.readForSearch(path),
+  ): Promise<GrepResult> {
+    const offset = input.offset ?? 0;
+    const limit = Math.min(input.head_limit === 0 ? 1000 : (input.head_limit ?? 200), 1000);
+    const results: GrepEntry[] = [];
+    let total = 0;
+    let outputBytes = 0;
+    let budgetReached = false;
+    let work = 0;
+    for (const item of files) {
+      signal?.throwIfAborted();
+      const file = await read(item.path, true);
+      if (!file) continue;
+      for (const chunk of searchChunks(file.content, !!input.multiline)) {
+        signal?.throwIfAborted();
+        const matcher = regex.matcher(chunk.text);
+        while (matcher.find()) {
+          const index = total++;
+          if (index >= offset && results.length < limit && !budgetReached) {
+            const { entry, bytes } = characterWindow(
+              file,
+              chunk.offset + matcher.start(),
+              chunk.offset + matcher.end(),
+              context,
+            );
+            const additionalBytes = bytes + (results.length ? 1 : 0);
+            if (outputBytes + additionalBytes > WINDOW_ENTRY_BYTES) budgetReached = true;
+            else {
+              results.push(entry);
+              outputBytes += additionalBytes;
+            }
+          }
+          // Yield even after filling the page: counting dense/zero-length matches must remain cancellable.
+          if (++work % 2048 === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            signal?.throwIfAborted();
+          }
+        }
+        if (++work % 2048 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          signal?.throwIfAborted();
+        }
+      }
+    }
+    signal?.throwIfAborted();
+    const next = offset + results.length;
+    const truncated = next < total;
+    return {
+      output_mode: 'content',
+      output_mode_detail: 'char_window',
+      results,
+      total_matches: total,
+      total_results: total,
+      truncated,
+      ...(truncated
+        ? {
+            next_offset: next,
+            truncation_reason: budgetReached ? ('output_budget' as const) : ('head_limit' as const),
+          }
+        : {}),
+      ...(offset >= total && total > 0
+        ? { message: 'No entries at this offset. Reset or reduce offset; the pattern does match.' }
+        : {}),
+    };
+  }
+
+  private sourceScan(signal?: AbortSignal, used = false) {
+    let bytes = 0;
+    let skippedCount = 0;
+    const started = Date.now();
+    const skipped: { file_path: string; reason: string }[] = [];
+    const skip = (path: string, reason: string) => {
+      skippedCount++;
+      const item = { file_path: path, reason };
+      // Keep the search report within the character-window envelope reservation.
+      if (utf8.encode(JSON.stringify([...skipped, item])).length <= 650) skipped.push(item);
+    };
+    return {
+      read: async (path: string, full: boolean): Promise<FileRecord | undefined> => {
+        signal?.throwIfAborted();
+        if (!path.startsWith('/source/'))
+          return full || path.startsWith('/artifacts/')
+            ? this.workspace.readForSearch(path)
+            : this.workspace.read(path);
+        used = true;
+        if (bytes >= SOURCE_SCAN_BYTES || Date.now() - started > 30000) {
+          skip(path, bytes >= SOURCE_SCAN_BYTES ? 'scan_budget' : 'time_budget');
+          return;
+        }
+        try {
+          const file = await this.workspace.readForSearch(path);
+          signal?.throwIfAborted();
+          const size = utf8.encode(file.content).length;
+          if (bytes + size > SOURCE_SCAN_BYTES) {
+            skip(path, 'scan_budget');
+            return;
+          }
+          bytes += size;
+          return file;
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (
+            error instanceof AgentError &&
+            !['context_changed', 'debugger_detached', 'attach_failed'].includes(error.code)
+          ) {
+            skip(path, error.code);
+            return;
+          }
+          throw error;
+        }
+      },
+      report: () =>
+        used
+          ? {
+              search_complete: skippedCount === 0,
+              scanned_bytes: bytes,
+              skipped_count: skippedCount,
+              skipped,
+            }
+          : {},
     };
   }
 }

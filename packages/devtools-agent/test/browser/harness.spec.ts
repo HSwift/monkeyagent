@@ -5,6 +5,7 @@ import { instrumentPanel, rpc } from './helpers';
 test('familiar tools recover from validation errors, run browser JS and persist unique IDs and terminal diagnostics', async () => {
   const requests: any[] = [];
   const file_path = '/workspace/main.user.js';
+  const output_file = '/workspace/scratch/browser-check.json';
   const source =
     '// ==UserScript==\n// @name Harness replay\n// @match http://127.0.0.1/*\n// ==/UserScript==\nconst value = "before";';
   let targetUrl = '';
@@ -48,7 +49,8 @@ test('familiar tools recover from validation errors, run browser JS and persist 
       delta = tool('repl', {
         description: '安装并检查原生导航和状态',
         timeout: 30000,
-        code: `await sleep(5); await scripts.apply(${JSON.stringify(file_path)}); await browser.navigate(${JSON.stringify(targetUrl + '?check')}); return {page:await browser.evaluate('({title:document.title,sibling:!!document.querySelector("h1")})'),status:await scripts.status(${JSON.stringify(file_path)})};`,
+        output_file,
+        code: `state.outputCalls = (state.outputCalls || 0) + 1; await sleep(5); await scripts.apply(${JSON.stringify(file_path)}); await browser.navigate(${JSON.stringify(targetUrl + '?check')}); return {page:await browser.evaluate('({title:document.title,sibling:!!document.querySelector("h1")})'),status:await scripts.status(${JSON.stringify(file_path)}),payload:"FILE_ONLY_PAYLOAD".repeat(12000)+"_TAIL_TARGET"};`,
       });
     else if (call === 7)
       delta = {
@@ -57,6 +59,15 @@ test('familiar tools recover from validation errors, run browser JS and persist 
           { name: 'Read', args: { file_path } },
           { name: 'Glob', args: { pattern: '**/*.user.js' } },
           { name: 'Grep', args: { pattern: 'value.*after', output_mode: 'content' } },
+          {
+            name: 'Grep',
+            args: {
+              pattern: 'TAIL_TARGET',
+              path: output_file,
+              output_mode: 'content',
+              char_context: 20,
+            },
+          },
         ].map(({ name, args }, index) => ({
           index,
           id: `read-${index}`,
@@ -133,12 +144,20 @@ test('familiar tools recover from validation errors, run browser JS and persist 
     );
     expect(validationError.content).toContain('file_path');
     expect(validationError.content).not.toContain('LARGE_ERROR_INPUT');
-    const lastResult = JSON.parse(
-      requests[5].messages.find((message: any) => message.tool_call_id === 'tool-5').content,
-    ).value;
+    const modelOutput = requests[5].messages.find(
+      (message: any) => message.tool_call_id === 'tool-5',
+    ).content;
+    const savedOutput = JSON.parse(modelOutput).value;
+    expect(savedOutput).toMatchObject({ path: output_file, size: expect.any(Number) });
+    expect(modelOutput).not.toContain('FILE_ONLY_PAYLOAD');
+    expect(savedOutput).not.toHaveProperty('page');
+    const savedContents = (await rpc(frame, 'files.read', output_file)).content;
+    const lastResult = JSON.parse(savedContents);
     expect(lastResult.page).toEqual({ title: 'Harness target', sibling: true });
     expect(lastResult.status).not.toHaveProperty('installedCode');
     expect(lastResult.status.state).toBe('installed');
+    expect(lastResult.payload).toBe('FILE_ONLY_PAYLOAD'.repeat(12000) + '_TAIL_TARGET');
+    expect((await rpc(frame, 'repl.run', 'return state.outputCalls;')).value).toBe(1);
     const first = await rpc(frame, 'snapshot');
     expect(first.run.steps).toHaveLength(6);
     expect(first.run.steps[0]).toMatchObject({ inputTokens: 10, outputTokens: 5 });
@@ -156,6 +175,16 @@ test('familiar tools recover from validation errors, run browser JS and persist 
     expect(readResult('read-0').content).toContain('1→// ==UserScript==');
     expect(readResult('read-1').files).toContain(file_path);
     expect(readResult('read-2').results[0].text).toContain('"after"');
+    expect(readResult('read-3')).toMatchObject({
+      output_mode_detail: 'char_window',
+      total_matches: 1,
+    });
+    expect(readResult('read-3').results[0]).toMatchObject({
+      offset: savedContents.indexOf('TAIL_TARGET'),
+      match_length: 11,
+    });
+    expect(readResult('read-3').results[0].offset).toBeGreaterThan(128 * 1024);
+    expect(readResult('read-3').results[0].text).toContain('TAIL_TARGET');
     await panel.getByRole('button', { name: 'Model settings', exact: true }).waitFor();
     frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const assistants = (await rpc(frame, 'snapshot')).messages.filter(

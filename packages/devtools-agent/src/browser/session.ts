@@ -1,6 +1,7 @@
 import { AgentError } from '../protocol/errors';
 import type { BrowserEvent } from '../protocol/types';
 import type { WorkspaceService } from '../workspace/service';
+import { PageSources } from './sources';
 
 interface EventQuery {
   after?: number;
@@ -18,6 +19,7 @@ type Context = {
 };
 
 export class BrowserSession {
+  readonly sources: PageSources;
   connected = false;
   private attaching?: Promise<void>;
   private detachedReason?: string;
@@ -32,6 +34,7 @@ export class BrowserSession {
     reject: (error: Error) => void;
   }>();
   private childSessions = new Set<string>();
+  private childPages = new Set<string>();
   private mainFrameId?: string;
   private invalidHandles = new Set<string>();
   private handles = new Map<string, string | undefined>();
@@ -43,6 +46,15 @@ export class BrowserSession {
     private beforeAttach: () => Promise<void> = async () => {},
     private navigated: (url: string) => void = () => {},
   ) {
+    this.sources = new PageSources({
+      ensure: () => this.ensure(),
+      command: (method, params, sessionId) => this.command(method, params, sessionId),
+      sessions: () => [...this.childSessions],
+      pageSessions: () => [...this.childPages],
+      frame: (id, sessionId) =>
+        this.executionContexts.get(this.contextKey(id, sessionId))?.auxData?.frameId,
+    });
+    this.workspace.sources = this.sources;
     chrome.debugger.onEvent.addListener(this.onEvent);
     chrome.debugger.onDetach.addListener(this.onDetach);
   }
@@ -106,6 +118,7 @@ export class BrowserSession {
   }
   async dispose() {
     await this.disconnect();
+    this.sources.dispose();
     chrome.debugger.onEvent.removeListener(this.onEvent);
     chrome.debugger.onDetach.removeListener(this.onDetach);
   }
@@ -384,20 +397,26 @@ export class BrowserSession {
   private onEvent = (source: chrome.debugger.Debuggee, method: string, params?: object) => {
     if (source.tabId !== this.tabId) return;
     const sessionId = (source as chrome.debugger.Debuggee & { sessionId?: string }).sessionId;
+    if (sessionId && !this.childSessions.has(sessionId)) return;
     const data = (params ?? {}) as Record<string, any>;
+    this.sources.event(method, data, sessionId);
     if (method === 'Runtime.executionContextCreated') {
       const context = { ...data.context, sessionId } as Context;
       this.executionContexts.set(this.contextKey(context.id, sessionId), context);
     } else if (method === 'Runtime.executionContextDestroyed') {
       this.executionContexts.delete(this.contextKey(data.executionContextId, sessionId));
-    } else if (method === 'Runtime.executionContextsCleared') this.invalidate(sessionId);
-    else if (
+    } else if (method === 'Runtime.executionContextsCleared') {
+      this.invalidate(sessionId);
+      this.sources.invalidate(true, sessionId);
+    } else if (
       method === 'Page.navigatedWithinDocument' &&
       !sessionId &&
       data.frameId === this.mainFrameId
     ) {
+      this.sources.invalidate(false);
       this.navigated(data.url);
     } else if (method === 'Page.frameNavigated') {
+      this.sources.invalidate(false);
       if (!data.frame.parentId) {
         this.invalidate(sessionId);
         if (!sessionId) {
@@ -410,9 +429,13 @@ export class BrowserSession {
             this.executionContexts.delete(key);
         }
       }
+    } else if (method === 'Page.frameDetached') {
+      this.sources.invalidate(false);
     } else if (method === 'Target.attachedToTarget') {
       this.childSessions.add(data.sessionId);
+      if (data.targetInfo?.type === 'iframe') this.childPages.add(data.sessionId);
       this.enableDomains(data.sessionId)
+        .then(() => this.sources.enable(data.sessionId))
         .then(() =>
           this.command(
             'Target.setAutoAttach',
@@ -425,6 +448,7 @@ export class BrowserSession {
         );
     } else if (method === 'Target.detachedFromTarget') {
       this.childSessions.delete(data.sessionId);
+      this.childPages.delete(data.sessionId);
       this.invalidate(data.sessionId);
     }
     const event = this.push(method, params ?? {}, sessionId);
@@ -459,11 +483,13 @@ export class BrowserSession {
     return event;
   }
   private reset(reason: string) {
+    this.sources.disconnected();
     this.connected = false;
     this.detachedReason = reason;
     this.handles.clear();
     this.executionContexts.clear();
     this.childSessions.clear();
+    this.childPages.clear();
     for (const waiter of [...this.waiters])
       waiter.reject(new AgentError('debugger_detached', reason));
   }

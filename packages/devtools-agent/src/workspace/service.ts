@@ -3,6 +3,7 @@ import { API_DOCS } from './docs';
 import { AgentError } from '../protocol/errors';
 import type { ArtifactRef, FileRecord, ScriptBinding, WorkspaceRecord } from '../protocol/types';
 import { siteKey, siteWorkspaceId } from './site';
+import type { SourceProvider } from './source';
 
 /** Mutations acknowledge a revision; use read() when the full source is actually needed. */
 export function fileSummary(file: FileRecord) {
@@ -29,15 +30,16 @@ export function normalizePath(path: string): string {
     if (part === '..') throw new AgentError('invalid_path', 'Parent traversal is not allowed.');
     parts.push(part);
   }
-  if (!['workspace', 'artifacts', 'docs'].includes(parts[0]))
+  if (!['workspace', 'artifacts', 'docs', 'source'].includes(parts[0]))
     throw new AgentError(
       'invalid_path',
-      'Use /workspace/<name> for script files, for example /workspace/main.user.js. /docs and /artifacts are read-only; /scripts is not a workspace directory.',
+      'Use /workspace/<name> for script files, for example /workspace/main.user.js. /docs, /source and /artifacts are read-only; /scripts is not a workspace directory.',
     );
   return '/' + parts.join('/');
 }
 
 export class WorkspaceService {
+  sources?: SourceProvider;
   constructor(
     public db: AgentDB,
     public id: string,
@@ -68,6 +70,34 @@ export class WorkspaceService {
     this.changed();
   }
   async list(prefix = '/') {
+    if (prefix === '/artifacts' || prefix.startsWith('/artifacts/')) {
+      prefix = normalizePath(prefix);
+      const artifacts = await this.db.getAllFromIndex('artifacts', 'workspaceId', this.id);
+      return artifacts
+        .filter(
+          (artifact) =>
+            artifact.path.startsWith(prefix) &&
+            /^(text\/|application\/json)/.test(artifact.mimeType),
+        )
+        .map((artifact) => ({
+          path: artifact.path,
+          revision: artifact.id,
+          updatedAt: artifact.createdAt,
+          size: artifact.size,
+        }))
+        .sort((a, b) => a.path.localeCompare(b.path));
+    }
+    if (prefix === '/source' || prefix.startsWith('/source/')) {
+      prefix = normalizePath(prefix);
+      if (!this.sources)
+        throw new AgentError(
+          'source_unavailable',
+          'Page sources are unavailable in this environment.',
+        );
+      return (await this.sources.list()).filter(
+        (file) => file.path === prefix || file.path.startsWith(prefix.replace(/\/$/, '') + '/'),
+      );
+    }
     const files = await this.db.getAllFromIndex('files', 'workspaceId', this.id);
     return [
       ...files.map(({ path, content, revision, updatedAt }) => ({
@@ -95,8 +125,33 @@ export class WorkspaceService {
     path: string,
     options?: { offset?: number; limit?: number },
   ): Promise<FileRecord & { offset?: number; totalLength?: number; truncated?: boolean }> {
+    const { file, kind } = await this.loadText(path);
+    if (kind === 'docs') return file;
+    if (kind === 'artifact' || kind === 'source')
+      return this.slice(file, { limit: 32000, ...options });
+    return options ? this.slice(file, options) : file;
+  }
+  /** Host-side search needs the complete snapshot; public read() retains its range limits. */
+  async readForSearch(path: string): Promise<FileRecord> {
+    return (await this.loadText(path)).file;
+  }
+  private async loadText(
+    path: string,
+  ): Promise<{ file: FileRecord; kind: 'file' | 'docs' | 'artifact' | 'source' }> {
     path = normalizePath(path);
-    if (API_DOCS[path]) return { path, content: API_DOCS[path], revision: 'docs-v1', updatedAt: 0 };
+    if (path === '/source' || path.startsWith('/source/')) {
+      if (!this.sources)
+        throw new AgentError(
+          'source_unavailable',
+          'Page sources are unavailable in this environment.',
+        );
+      return { file: await this.sources.read(path), kind: 'source' };
+    }
+    if (API_DOCS[path])
+      return {
+        file: { path, content: API_DOCS[path], revision: 'docs-v12', updatedAt: 0 },
+        kind: 'docs',
+      };
     const result = await this.db.get('files', this.key(path));
     if (!result) {
       const artifact = (await this.db.getAllFromIndex('artifacts', 'workspaceId', this.id)).find(
@@ -109,15 +164,13 @@ export class WorkspaceService {
           `Binary artifact ${artifact.id} (${artifact.mimeType}, ${artifact.size} bytes). Use the artifact reference to inspect images.`,
         );
       const content = await artifact.blob.text();
-      return this.slice(
-        { path, content, revision: artifact.id, updatedAt: artifact.createdAt },
-        { limit: 32000, ...options },
-      );
+      return {
+        file: { path, content, revision: artifact.id, updatedAt: artifact.createdAt },
+        kind: 'artifact',
+      };
     }
     const { content, revision, updatedAt } = result;
-    return options
-      ? this.slice({ path, content, revision, updatedAt }, options)
-      : { path, content, revision, updatedAt };
+    return { file: { path, content, revision, updatedAt }, kind: 'file' };
   }
   async write(path: string, content: string, expectedRevision?: string): Promise<FileRecord> {
     path = this.writable(path);
@@ -152,6 +205,7 @@ export class WorkspaceService {
     return { path, content, revision: record.revision, updatedAt: record.updatedAt };
   }
   async edit(path: string, search: string, replacement: string, expectedRevision: string) {
+    path = this.writable(path);
     const file = await this.read(path);
     if (!search || file.content.split(search).length !== 2)
       throw new AgentError('ambiguous_edit', 'Search must match exactly once.');
@@ -221,6 +275,11 @@ export class WorkspaceService {
   }
   async search(query: string, prefix = '/workspace/') {
     if (!query) throw new AgentError('invalid_input', 'Search text is required.');
+    if (prefix === '/source' || prefix.startsWith('/source/'))
+      throw new AgentError(
+        'unsupported_operation',
+        'Use Grep with path:"/source" for source search and its scan coverage report. fs.search searches saved workspace files.',
+      );
     const results = [];
     for (const file of await this.allFiles()) {
       if (!file.path.startsWith(prefix)) continue;
@@ -257,7 +316,7 @@ export class WorkspaceService {
   }
   private writable(path: string) {
     path = normalizePath(path);
-    if (path.startsWith('/docs/') || !/^\/(workspace|artifacts)\/.+/.test(path))
+    if (!/^\/workspace\/.+/.test(path))
       throw new AgentError('read_only', 'This path is read-only.');
     return path;
   }

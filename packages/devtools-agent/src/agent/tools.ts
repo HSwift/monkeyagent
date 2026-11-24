@@ -99,7 +99,7 @@ export function createTools(options: {
 }) {
   const files = options.fileTools ?? new FileTools(options.workspace);
   const filePath = string.describe(
-    'Absolute virtual file path. Script source belongs under /workspace/, e.g. /workspace/main.user.js. Guides are under /docs/.',
+    'Absolute virtual file path. Editable scripts belong under /workspace/, e.g. /workspace/main.user.js. Loaded page sources are read-only under /source; discover their paths with Glob. Guides are under /docs/.',
   );
   const contextLines = z.number().int().min(0).max(200).optional();
   async function runRepl(
@@ -185,10 +185,14 @@ export function createTools(options: {
     }),
     Grep: tool({
       description:
-        'Search file contents with RE2 regex syntax (no backreferences/lookarounds). path scopes a file/directory, default /workspace. glob/type filter files. output_mode defaults to files_with_matches; content includes line numbers, count counts matching lines per file. Supports context, case-insensitive, multiline and pagination. head_limit:0 requests all subject to a 1000-entry cap.',
+        'Search file contents with RE2 regex syntax (no backreferences/lookarounds). path scopes a file/directory, default /workspace. glob/type filter files. output_mode defaults to files_with_matches; content includes line numbers, count counts matching lines per file. For minified/long lines use output_mode:"content",char_context:200: one character window per occurrence, with UTF-16 offset/window_start/match_length and revision. char_context (0–2000) cannot be combined with -o or line-context flags. Character windows have a 16 KiB output budget, 4000-character text cap and next_offset pagination; check entry.truncated for shortened text. Otherwise supports line context, case-insensitive, multiline and pagination. head_limit:0 requests all subject to a 1000-entry cap.',
       inputSchema: z.strictObject({
         pattern: string.min(1).max(2048),
-        path: string.optional(),
+        path: string
+          .describe(
+            'File/directory scope; default /workspace. Use /source for page sources. Source searches scan at most 8 MiB and report search_complete/skipped_count; incomplete search cannot establish no match.',
+          )
+          .optional(),
         glob: string.max(1024).optional(),
         type: string.optional(),
         output_mode: z.enum(['content', 'files_with_matches', 'count']).optional(),
@@ -199,6 +203,7 @@ export function createTools(options: {
         '-B': contextLines,
         '-C': contextLines,
         context: contextLines,
+        char_context: z.number().int().min(0).max(2000).optional(),
         head_limit: z.number().int().min(0).optional(),
         offset: z.number().int().min(0).optional(),
         multiline: z.boolean().optional(),
