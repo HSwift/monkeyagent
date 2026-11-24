@@ -125,7 +125,7 @@ export class ContextCompactor {
         transcript: string,
         maxOutputTokens: number,
         signal: AbortSignal,
-      ) => Promise<string>;
+      ) => Promise<{ text: string; finishReason: string }>;
       save: (checkpoint: ContextCheckpoint) => Promise<void>;
       status?: (status: CompactionStatus) => Promise<void>;
     },
@@ -167,14 +167,19 @@ export class ContextCompactor {
         previousSummary: covered ? previous?.summary : undefined,
         messages: normalized(messages.slice(covered, cut)),
       });
-      const summary = (
-        await this.options.summarize(
-          transcript,
-          Math.min(4096, Math.max(256, Math.floor(this.options.limit / 4))),
-          signal,
-        )
-      ).trim();
+      // Reasoning tokens can share the provider's output budget with the actual handoff.
+      const result = await this.options.summarize(
+        transcript,
+        Math.min(8192, Math.max(1024, Math.floor(this.options.limit / 2))),
+        signal,
+      );
       signal.throwIfAborted();
+      if (result.finishReason !== 'stop')
+        throw new AgentError(
+          'compaction_failed',
+          `The context summary did not finish (${result.finishReason}). Keeping the original context.`,
+        );
+      const summary = result.text.trim();
       if (!summary)
         throw new AgentError('compaction_failed', 'The model returned an empty context summary.');
       const checkpoint: ContextCheckpoint = {

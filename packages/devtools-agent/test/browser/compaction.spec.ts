@@ -2,7 +2,7 @@ import { test, expect, chromium } from '@playwright/test';
 import { createServer } from 'node:http';
 import { instrumentPanel, rpc } from './helpers';
 
-test('auto-compaction preserves tool state and queued steering, resumes its checkpoint, and cancels cleanly', async () => {
+test('auto-compaction preserves state and steering, resumes, cancels, and rejects truncated summaries', async () => {
   const normal: any[] = [],
     summaries: any[] = [];
   const effects = new Map<string, number>();
@@ -52,9 +52,11 @@ test('auto-compaction preserves tool state and queued steering, resumes its chec
               message: {
                 role: 'assistant',
                 content:
-                  'HANDOFF_CHECKPOINT: Keep the footer and sidebar. Completed operations already took effect. Continue from retained tool state without replaying mutations. Preserve /workspace/ and /artifacts/ references.',
+                  mode === 'truncated'
+                    ? 'PARTIAL_HANDOFF_MUST_NOT_BE_USED'
+                    : 'HANDOFF_CHECKPOINT: Keep the footer and sidebar. Completed operations already took effect. Continue from retained tool state without replaying mutations. Preserve /workspace/ and /artifacts/ references.',
               },
-              finish_reason: 'stop',
+              finish_reason: mode === 'truncated' ? 'length' : 'stop',
             },
           ],
           usage: { prompt_tokens: 1000, completion_tokens: 50, total_tokens: 1050 },
@@ -139,7 +141,9 @@ test('auto-compaction preserves tool state and queued steering, resumes its chec
     );
     await panel.getByLabel('Auto-compact threshold (tokens)', { exact: false }).fill('12000');
     await panel.getByRole('button', { name: 'Save settings', exact: true }).click();
-    expect((await rpc(frame, 'settings.get')).autoCompactTokenLimit).toBe(12000);
+    await expect
+      .poll(async () => (await rpc(frame, 'settings.get')).autoCompactTokenLimit)
+      .toBe(12000);
     await panel
       .getByRole('textbox', { name: 'Message Agent' })
       .fill('Keep the footer and complete all eight operations.');
@@ -213,6 +217,27 @@ test('auto-compaction preserves tool state and queued steering, resumes its chec
     await expect.poll(async () => (await rpc(frame, 'snapshot')).run.status).toBe('interrupted');
     expect((await rpc(frame, 'snapshot')).session.context).toBeUndefined();
     expect(normal).toHaveLength(requestsAtStop);
+    await rpc(frame, 'chat.clear');
+    await expect(panel.getByRole('heading', { name: 'How can I help?' })).toBeVisible();
+    mode = 'truncated';
+    steps = 0;
+    const summariesBeforeTruncation = summaries.length;
+    await panel
+      .getByRole('textbox', { name: 'Message Agent' })
+      .fill('Finish despite a cut-off summary.');
+    await panel.getByRole('button', { name: 'Send message', exact: true }).click();
+    await expect.poll(async () => (await rpc(frame, 'snapshot')).run.status).toBe('completed');
+    const preserved = await rpc(frame, 'snapshot');
+    expect(preserved.session.context).toBeUndefined();
+    expect(preserved.run.compaction).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('length'),
+    });
+    expect(summaries).toHaveLength(summariesBeforeTruncation + 1);
+    expect(JSON.stringify(normal.at(-1).messages)).toContain('OLD_DETAIL_truncated_1');
+    expect(JSON.stringify(normal.at(-1).messages)).not.toContain(
+      'PARTIAL_HANDOFF_MUST_NOT_BE_USED',
+    );
   } finally {
     release?.();
     await context.close();

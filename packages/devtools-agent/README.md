@@ -72,7 +72,7 @@ pnpm dev:mv3
 
 达到阈值后，在完整工具交互边界，用当前模型发起一次无工具的摘要请求，参考 [Codex 交接模板](https://github.com/openai/codex/blob/02390c8d8e39a9b72d12e04e83987d5eb6801310/codex-rs/prompts/templates/compact/prompt.md)保留目标与约束、已完成工作及验证、未完成任务和关键路径/工件。后续输入使用摘要、最近三组完整交互及必要时原样保留的最新用户要求；压缩期间补充的要求会进入下一次正常请求。摘要及原始历史覆盖边界按 session 持久化，刷新后继续使用；关闭自动压缩仍可复用已有摘要，Clear context 同时清除摘要。原始聊天记录保持完整，压缩不会重启 REPL、改写 state 或重放工具；刷新面板仍沿用原有 Worker 重建行为。
 
-空摘要、摘要未缩小输入、保留内容仍超阈值或请求/保存失败时，继续使用原上下文，本轮不重复自动尝试。停止会取消尚在进行的摘要请求。状态栏显示压缩进度、前后 token 估算或失败提示；debug pack 保留摘要、边界与运行状态。
+只有正常结束（finishReason 为 stop）的摘要可替换上下文。摘要被截断、空摘要、摘要未缩小输入、保留内容仍超阈值或请求/保存失败时，继续使用原上下文，本轮不重复自动尝试。摘要输出额度包含推理模型的推理开销，上限为 8192 tokens。停止会取消尚在进行的摘要请求。状态栏显示压缩进度、前后 token 估算或失败提示；debug pack 保留摘要、边界与运行状态。
 
 REPL 内置 `networks.status/list/get/requestBody/responseBody/getHAR`，直接复用 F12 Network 的 HAR 日志和原生正文读取。打开 DevTools 后仅订阅轻量事件，首次查询（包含 status）才读取当前 HAR 并建立索引，正文仍按需读取；首次查询前 F12 已保留的原生日志也可读取。不需要 start/connect，不修改录制、缓存或 Preserve log 设置。查询跟随 F12 Clear 和原生日志保留行为；同 URL 请求分别保留，正文不可用时报错，不重新请求。分页摘要限 16 KiB，详情桥接限 3 MiB JSON，完整正文限 2 MiB，较大正文可显式按字符范围读取（宿主取体上限 8 MiB）。标识是当前元数据版本的 opaque ID，不是 CDP requestId；数据变化后按 context_changed 重新列举。公共扩展 API 未暴露的录制控制、WS/SSE 消息流不在此伪造。完整契约见 [Network 指南](src/agent/guides/networks-api.md)。
 

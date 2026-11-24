@@ -63,8 +63,10 @@ function setup(overrides: Partial<ConstructorParameters<typeof ContextCompactor>
   const saved: ContextCheckpoint[] = [],
     statuses: CompactionStatus[] = [];
   const summarize = vi.fn(
-    async () =>
-      'HANDOFF: Keep user constraints; work is partly complete. Inspect /artifacts/result.json before continuing.',
+    async (_transcript: string, _maxOutputTokens: number, _signal: AbortSignal) => ({
+      text: 'HANDOFF: Keep user constraints; work is partly complete. Inspect /artifacts/result.json before continuing.',
+      finishReason: 'stop',
+    }),
   );
   const save = vi.fn(async (checkpoint: ContextCheckpoint) => {
     saved.push(checkpoint);
@@ -208,6 +210,8 @@ it('uses provider input-token usage when available and includes system/tools in 
   compactor.observe(25000);
   await compactor.prepare(messages, signal());
   expect(saved[0].beforeTokens).toBe(25000);
+  expect(summarize.mock.calls[0][1]).toBeGreaterThan(4096);
+  expect(summarize.mock.calls[0][1]).toBeLessThanOrEqual(8192);
   const overhead = setup({ overhead: { instructions: 'x'.repeat(50000) } });
   await overhead.compactor.prepare(messages, signal());
   expect(overhead.statuses[0].beforeTokens).toBeGreaterThan(20000);
@@ -217,12 +221,17 @@ it('uses provider input-token usage when available and includes system/tools in 
   ).toBeLessThan(2000);
 });
 
-it.each(['empty', 'inflated', 'network', 'save'])(
+it.each(['empty', 'inflated', 'network', 'save', 'length', 'content-filter', 'error', 'unknown'])(
   'retains context and suppresses further automatic attempts after a %s failure',
   async (kind) => {
     const summarize = vi.fn(async () => {
       if (kind === 'network') throw new Error('Network failed');
-      return kind === 'empty' ? '' : kind === 'inflated' ? 'x'.repeat(100000) : 'Summary';
+      return {
+        text: kind === 'empty' ? '' : kind === 'inflated' ? 'x'.repeat(100000) : 'Partial summary',
+        finishReason: ['length', 'content-filter', 'error', 'unknown'].includes(kind)
+          ? kind
+          : 'stop',
+      };
     });
     const save = vi.fn(async () => {
       if (kind === 'save') throw new Error('Storage failed');
@@ -241,7 +250,7 @@ it('cancels a summary without installing a checkpoint or retrying tools', async 
   const abort = new AbortController();
   const summarize = vi.fn(
     (_text: string, _tokens: number, signal: AbortSignal) =>
-      new Promise<string>((_resolve, reject) =>
+      new Promise<{ text: string; finishReason: string }>((_resolve, reject) =>
         signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
       ),
   );

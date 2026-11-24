@@ -618,7 +618,7 @@ export class Controller {
             maxRetries: 0,
             abortSignal: signal,
           });
-          return result.text;
+          return result;
         },
         save: (checkpoint) => session.saveContext(checkpoint, conversationId),
         status: async (status) => {
