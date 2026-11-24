@@ -13,6 +13,7 @@ export type RunStatus =
 export interface AgentErrorData {
   code: string;
   message: string;
+  details?: Record<string, unknown>;
 }
 export interface FileRecord {
   path: string;

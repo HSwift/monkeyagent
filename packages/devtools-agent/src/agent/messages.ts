@@ -19,7 +19,7 @@ export function toolInputHint(toolName: string) {
     Glob: 'pattern; optional path',
     Grep: 'pattern; optional path, glob, output_mode',
     files: 'Legacy files requires op; use Read/Write/Edit/Glob/Grep for new calls',
-    repl: 'code as a JavaScript string; optional timeout (50–60000 ms) and description',
+    repl: 'code as a JavaScript string; optional timeout (50–60000 ms) and description, output_file (new /workspace/ path for final JSON output)',
   };
   return `Invalid ${toolName} arguments. Expected: ${inputs[toolName] ?? 'a registered tool name'}. Script paths start with /workspace/. Read /docs/agent-guide.md and resend a corrected call.`;
 }

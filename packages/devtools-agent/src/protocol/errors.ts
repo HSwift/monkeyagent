@@ -4,22 +4,36 @@ export class AgentError extends Error {
   constructor(
     public code: string,
     message: string,
+    public details?: AgentErrorData['details'],
   ) {
     super(message);
     this.name = 'AgentError';
   }
 }
 export function errorData(error: unknown): AgentErrorData {
+  // QuickJS unwraps Error properties into a native Error with the same code/details.
+  const structured =
+    error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    /^[a-z][a-z_]{0,63}$/.test(error.code);
   return {
     code:
-      error instanceof AgentError
-        ? error.code
+      error instanceof AgentError || structured
+        ? (error.code as string)
         : error instanceof DOMException && error.name === 'AbortError'
           ? 'aborted'
           : error instanceof Error && /^[a-z][a-z_]+$/.test(error.name)
             ? error.name
             : 'error',
     message: error instanceof Error ? error.message : String(error),
+    ...((error instanceof AgentError || structured) &&
+    'details' in error &&
+    error.details &&
+    typeof error.details === 'object' &&
+    !Array.isArray(error.details)
+      ? { details: error.details as Record<string, unknown> }
+      : {}),
   };
 }
 export function aborted(signal?: AbortSignal) {

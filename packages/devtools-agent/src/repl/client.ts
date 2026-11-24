@@ -59,7 +59,7 @@ export class ReplClient {
           cleanup();
           if (data.error) {
             if (/interrupted|out of memory|memory limit/i.test(data.error.message)) this.reset();
-            reject(new AgentError(data.error.code, data.error.message));
+            reject(new AgentError(data.error.code, data.error.message, data.error.details));
           } else resolve(data.value);
         }
       };

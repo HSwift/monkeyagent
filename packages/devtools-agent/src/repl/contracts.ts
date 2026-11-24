@@ -75,7 +75,7 @@ export function validateHostCall(method: string, args: unknown[]) {
       .join('; ');
     throw new AgentError(
       'invalid_input',
-      `${method}: ${issues}. See /docs/browser-api.md or /docs/script-api.md.`,
+      `${method}: ${issues}. See /docs/agent-guide.md for the API documentation index.`,
     );
   }
 }

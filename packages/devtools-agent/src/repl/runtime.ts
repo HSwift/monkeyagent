@@ -5,10 +5,10 @@ import {
   type QuickJSHandle,
   type QuickJSWASMModule,
 } from 'quickjs-emscripten-core';
-import { AgentError } from '../protocol/errors';
+import { AgentError, errorData } from '../protocol/errors';
 import type { ToolResult } from '../protocol/types';
 
-export type HostCall = (method: string, args: unknown[]) => Promise<unknown>;
+export type HostCall = (method: string, args: unknown[], signal?: AbortSignal) => Promise<unknown>;
 const METHODS = {
   fs: ['list', 'read', 'write', 'edit', 'remove', 'rename', 'search'],
   browser: [
@@ -62,10 +62,21 @@ export class ReplRuntime {
           },
           (error) => {
             if (this.disposed || !deferred.alive) return;
+            const data = errorData(error);
             const handle = this.vm.newError({
               name: error?.code ?? 'HostError',
-              message: error instanceof Error ? error.message : String(error),
+              message: data.message,
             });
+            const code = this.vm.newString(data.code);
+            this.vm.setProp(handle, 'code', code);
+            code.dispose();
+            if (data.details) {
+              const details = this.vm.unwrapResult(
+                this.vm.evalCode(`(${JSON.stringify(data.details)})`),
+              );
+              this.vm.setProp(handle, 'details', details);
+              details.dispose();
+            }
             deferred.reject(handle);
             handle.dispose();
           },

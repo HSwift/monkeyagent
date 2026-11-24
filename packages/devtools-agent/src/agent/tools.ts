@@ -1,8 +1,9 @@
 import { tool, type ToolResultPart } from 'ai';
 import { z } from 'zod';
 import type { WorkspaceService } from '../workspace/service';
-import { fileSummary } from '../workspace/service';
+import { fileSummary, normalizePath } from '../workspace/service';
 import type { ToolResult, ArtifactRef } from '../protocol/types';
+import { AgentError, errorData } from '../protocol/errors';
 import { FileTools } from './file-tools';
 
 export const ACTIVE_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'repl'] as const;
@@ -101,6 +102,49 @@ export function createTools(options: {
     'Absolute virtual file path. Script source belongs under /workspace/, e.g. /workspace/main.user.js. Guides are under /docs/.',
   );
   const contextLines = z.number().int().min(0).max(200).optional();
+  async function runRepl(
+    input: { code: string; timeout?: number; output_file?: string },
+    signal?: AbortSignal,
+  ) {
+    let outputPath: string | undefined;
+    if (input.output_file !== undefined) {
+      try {
+        signal?.throwIfAborted();
+        outputPath = normalizePath(input.output_file);
+        if (!outputPath.startsWith('/workspace/'))
+          throw new AgentError('read_only', 'output_file must be a file under /workspace/.');
+        try {
+          await options.workspace.read(outputPath);
+          throw new AgentError('conflict', 'The output file already exists. Choose a new path.');
+        } catch (error) {
+          if (!(error instanceof AgentError && error.code === 'not_found')) throw error;
+        }
+      } catch (error) {
+        const data = errorData(error);
+        throw new AgentError(data.code, `REPL was not executed. ${data.message}`, {
+          ...data.details,
+          phase: 'preflight',
+          replCompleted: false,
+          output_file: input.output_file,
+        });
+      }
+    }
+    const value = await options.repl(input.code, input.timeout, signal);
+    if (outputPath === undefined) return value;
+    try {
+      signal?.throwIfAborted();
+      const content = JSON.stringify(value ?? null);
+      return fileSummary(await options.workspace.write(outputPath, content));
+    } catch (error) {
+      const data = errorData(error);
+      throw new AgentError(data.code, `REPL completed, but saving output failed. ${data.message}`, {
+        ...data.details,
+        phase: 'output',
+        replCompleted: true,
+        output_file: outputPath,
+      });
+    }
+  }
   return {
     Read: tool({
       description:
@@ -134,7 +178,7 @@ export function createTools(options: {
     }),
     Glob: tool({
       description:
-        'Find workspace files by glob pattern, e.g. **/*.user.js. path scopes a directory (default /workspace). Supports **, *, ?, classes and braces. Returns matching absolute paths sorted by modification time, at most 1000 files.',
+        'Find virtual files by glob pattern, e.g. **/*.user.js. path scopes a directory (default /workspace); use path:"/source" for loaded page HTML/CSS/JS and runtime scripts. Supports **, *, ?, classes and braces. Returns matching absolute paths sorted by modification time, at most 1000 files. Use returned source paths; relist after navigation/context_changed.',
       inputSchema: z.strictObject({ pattern: string.min(1).max(1024), path: string.optional() }),
       execute: (input, { abortSignal }) =>
         options.execute('Glob', input, () => files.glob(input), abortSignal),
@@ -193,7 +237,7 @@ export function createTools(options: {
     }),
     repl: tool({
       description:
-        'Run JavaScript with await and explicit return. Call fs, browser, scripts DIRECTLY (never __hosts__). Use state across calls and await sleep(ms) for delays. No setTimeout/setInterval, shell, Node, fetch, DOM or chrome globals in this interpreter; DOM and page timers belong inside browser.evaluate(expression). Use browser.navigate(url) for navigation and browser.reload() after installation. Read /docs/agent-guide.md before the first development operation.',
+        'Run JavaScript with await and explicit return. Optional output_file saves the final return value as JSON to a NEW /workspace/ file and returns only file metadata; functions and state are unchanged. Existing paths are rejected before execution when possible. An error with details.replCompleted:true means code ran but output saving failed: do not rerun mutations. Call fs, browser, scripts DIRECTLY (never __hosts__). Use state across calls and await sleep(ms) for delays. No setTimeout/setInterval, shell, Node, global fetch, DOM or chrome globals in this interpreter; DOM and page timers belong inside browser.evaluate(expression). Use browser.navigate(url) for navigation and browser.reload() after installation. Read /docs/agent-guide.md before the first development operation.',
       inputSchema: z.strictObject({
         code: string.max(200000),
         timeout: z
@@ -209,14 +253,15 @@ export function createTools(options: {
           .max(200)
           .describe('Brief purpose of this JavaScript operation, like a command description.')
           .optional(),
+        output_file: string
+          .min(1)
+          .describe(
+            'Optional absolute NEW /workspace/ file for the final return value as JSON, e.g. /workspace/scratch/result.json. Returns path/revision/size/updatedAt without the value. Create-only; existing paths and workspace size limits still apply. Strings are JSON-quoted. Omit for the usual return behavior.',
+          )
+          .optional(),
       }),
       execute: (input, { abortSignal }) =>
-        options.execute(
-          'repl',
-          input,
-          () => options.repl(input.code, input.timeout, abortSignal),
-          abortSignal,
-        ),
+        options.execute('repl', input, () => runRepl(input, abortSignal), abortSignal),
       toModelOutput: async ({ output }): Promise<ToolResultPart['output']> => {
         if (!options.supportsImages || !output.artifacts?.length)
           return { type: 'text', value: JSON.stringify(output) };

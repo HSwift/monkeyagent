@@ -30,7 +30,8 @@ self.onmessage = async (event) => {
     const pending = hostCalls.get(data.id);
     if (!pending) return;
     hostCalls.delete(data.id);
-    if (data.error) pending.reject(new AgentError(data.error.code, data.error.message));
+    if (data.error)
+      pending.reject(new AgentError(data.error.code, data.error.message, data.error.details));
     else pending.resolve(data.value);
   } else if (data.type === 'run') {
     try {
