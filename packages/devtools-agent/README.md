@@ -122,7 +122,7 @@ return { page, installed, check, screenshot: await browser.screenshot() };
 
 ### 调试包（推荐）
 
-在 Agent 的 **调试** 抽屉点击 **Export debug pack**，下载当前 session 的 `monkeyagent-debug-<站点>-<时间>.zip`，用于离线排查和改进扩展：
+在 Agent 面板右上角的 **⋯（More actions）** 菜单点击 **Export debug pack**，下载当前 session 的 `monkeyagent-debug-<站点>-<时间>.zip`，用于离线排查和改进扩展：
 
 | 路径 | 内容 |
 | --- | --- |

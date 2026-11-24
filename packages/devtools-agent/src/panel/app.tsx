@@ -15,6 +15,7 @@ import {
   ChevronDown,
   AlertCircle,
   RotateCcw,
+  PackageOpen,
 } from 'lucide-react';
 import { Button, IconButton, Modal, Scroller, Tooltip } from '../components/ui';
 import { Conversation, ChatMessage } from '../components/conversation';
@@ -45,6 +46,17 @@ const STATUS_LABELS: Record<string, string> = {
 };
 const running = (snapshot: Snapshot) =>
   ['generating', 'executing', 'stopping'].includes(snapshot.run?.status ?? '');
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Revoke later; the download may start asynchronously.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
 export function App({ client }: { client: ControllerClient }) {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [error, setError] = useState('');
@@ -69,8 +81,22 @@ export function App({ client }: { client: ControllerClient }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerTriggers = useRef<Partial<Record<WorkspaceView, HTMLButtonElement | null>>>({});
   const [attachment, setAttachment] = useState<Attachment>();
+  const [exporting, setExporting] = useState(false);
   function report(error: unknown) {
     setError(error instanceof Error ? error.message : String(error));
+  }
+  async function exportDebugPack() {
+    setExporting(true);
+    try {
+      const { blob, filename } = await client.call<{ blob: Blob; filename: string }>(
+        'debug.export',
+      );
+      downloadBlob(blob, filename);
+    } catch (error) {
+      report(error);
+    } finally {
+      setExporting(false);
+    }
   }
   function applySettings(settings: ModelSettings) {
     setModel(settings.model || 'Configure model');
@@ -228,6 +254,14 @@ export function App({ client }: { client: ControllerClient }) {
                   <DropdownMenu.Item onSelect={() => setSettingsOpen(true)}>
                     <Settings2 size={15} />
                     Model settings
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    disabled={exporting}
+                    onSelect={() => void exportDebugPack()}
+                    title="Download this session's agent context, workspace, REPL history and browser events as a zip for offline extension debugging. Credentials are redacted; scripts and page data are included."
+                  >
+                    <PackageOpen size={15} />
+                    {exporting ? 'Exporting debug pack…' : 'Export debug pack'}
                   </DropdownMenu.Item>
                   <DropdownMenu.Separator />
                   <DropdownMenu.Item disabled={clearing} onSelect={() => setClearOpen(true)}>
