@@ -30,7 +30,7 @@ Monkey 的改动限于适配器和扩展集成。既有 MCP 功能保持独立�
 | 前端 | React、TypeScript、Vite | 组件、类型检查、独立多入口构建 | 页面组合和宿主入口 |
 | 聊天组件 | shadcn/ui 的 AI Elements 模式 | Chat、Message、Prompt Input、Tool、Task、File Tree、Model Selector | 绑定任务与文件数据 |
 | 通用组件 | shadcn/ui | Tabs、Resizable、Sheet、Dialog、Tooltip、Scroll Area、表单 | 布局、主题变量和业务操作 |
-| 代码编辑与差异 | CodeMirror 6、@codemirror/merge | JavaScript 编辑、查找、快捷键、差异视图 | 文件版本和脚本绑定状态 |
+| 代码编辑与差异 | CodeMirror 6、@codemirror/merge | JavaScript 编辑、查找、快捷键、脚本差异视图 | 文件版本和脚本绑定状态 |
 | JavaScript 执行 | quickjs-emscripten、Web Worker | JS 解释器、Promise、执行中断、内存限制 | fs、browser、scripts 的宿主函数 |
 | 持久化 | IndexedDB、idb | 事务、异步存储、Blob 存储 | 文件模型、修订、会话和运行记录 |
 | 工具参数 | Zod 与 AI SDK tool | 输入校验、工具 schema | 具体操作定义 |
@@ -106,7 +106,7 @@ Chrome 的 DevTools 页面生命周期与 DevTools 窗口一致，可直接访�
 | 用户需求 | 普通消息，可附文件或编辑器选区 |
 | Agent 回复 | 流式文字、代码块和链接 |
 | 工具调用 | 工具名、简短说明、耗时、运行状态；展开查看参数和结果 |
-| 文件修改 | 文件名和差异入口，点击定位到变更页 |
+| 文件修改 | 文件名入口，点击定位到文件编辑器；已安装脚本可进入 Changes |
 | 网页截图 | 缩略图，点击查看原图 |
 | 脚本安装 | 脚本名、安装结果、当前文件是否还有未安装改动 |
 | 任务结束 | 改动、实际验证结果、仍存在的问题 |
@@ -125,9 +125,11 @@ Chrome 的 DevTools 页面生命周期与 DevTools 窗口一致，可直接访�
 
 编辑器内容自动保存到工作区。保存到工作区和安装到 Monkey 是两个独立状态，界面明确区分“已保存”“尚未安装”“已安装”“安装后有修改”“验证通过”和“验证失败”。仅仅成功写入 Monkey 不标记为验证通过。
 
-变更页使用 @codemirror/merge 展示本轮修改。默认比较任务开始时的文件版本与当前版本，可切换到最近一次安装的版本。恢复操作生成新的文件修订；若要恢复网页实际运行的脚本，需要再次安装和刷新。
+Changes 使用 @codemirror/merge 展示已安装油猴脚本的保存版本与工作草稿之间的差异，按 scriptId 归属；普通工作区文件没有历史或恢复入口。版本在油猴统一保存入口记录，Agent 提交和油猴编辑器手动保存均覆盖，代码相同或启停不会新增版本，每个脚本最多保留最近 20 个版本。首次更新旧脚本补存更新前代码。恢复把选中版本载入脚本草稿，显式安装并刷新后才影响网页。
 
-手动编辑和 Agent 写文件使用相同的 WorkspaceService。编辑器有未提交草稿或版本已改变时保留两份内容并展示冲突，不静默覆盖。用户不需要逐次批准普通文件写入或安装，差异视图用于查看和恢复。
+手动编辑和 Agent 写文件使用相同的 WorkspaceService。编辑器有未提交草稿或版本已改变时保留两份内容并展示冲突，不静默覆盖。用户不需要逐次批准普通文件写入或安装，脚本差异视图用于查看保存版本并载入脚本草稿。
+
+Files 树展示 `/workspace`、`/docs`、`/artifacts`，只读根默认折叠，按需请求元数据和正文；文档直接列举内置索引，文本工件保留分页/下载。`/source` 不挂到面板，工具的 Sources 能力仍独立按需调用。目录数据不放入频繁同步的会话快照，工件保存只更新一个轻量变更标识；关闭或折叠目录时不刷新列表。选中文件按站点工作区归属，避免跨站读取旧工件，普通文件更新也不抢走只读视图的选择。
 
 ### 调试区与 REPL
 
@@ -165,7 +167,7 @@ await repl({
 
 Agent 运行遵循以下顺序：
 
-1. Controller 创建 runId，记录任务开始时的文件修订和当前网页标识。
+1. Controller 创建 runId，记录当前网页标识；文件操作仍以当前修订校验并发。
 2. 组装用户需求、显式附件、工作区目录、目标网页信息，以及工具说明。
 3. AI SDK 请求模型，流式返回文字或工具调用。
 4. 工具经统一队列执行，结果以 SDK 的工具结果格式返回；文件、调试事件和截图进入工作区存储。
@@ -234,7 +236,7 @@ chrome.debugger 已提供所需的 Runtime、DOM、Input、Page、Network、Fetc
 
 ## 文件系统与数据保存
 
-工作区与 session 分离：一个站点（eTLD+1，包含私有后缀）对应一个共享工作区和多个 session。文件、修订、脚本绑定归工作区，消息、运行、工具记录和任务基线归 session；历史列表只展示当前站点的 session。跨站导航停止当前运行并切换站点，返回时恢复该标签页在该站点最近使用的 session。同站点多个窗口可共享文件，单个 session 通过 Web Locks 保持执行独占。旧数据升级时保留原 session ID，同名不同内容文件保存为迁移副本。
+工作区与 session 分离：一个站点（eTLD+1，包含私有后缀）对应一个共享工作区和多个 session。当前文件和脚本绑定归工作区，消息、运行、工具记录归 session；油猴脚本历史归宿主中的 scriptId；历史列表只展示当前站点的 session。跨站导航停止当前运行并切换站点，返回时恢复该标签页在该站点最近使用的 session。同站点多个窗口可共享文件，单个 session 通过 Web Locks 保持执行独占。旧数据升级时保留原 session ID，同名不同内容文件保存为迁移副本。v3 删除通用 revisions 表、会话任务基线和绑定中的重复安装代码，保留当前文件、会话及脚本绑定；旧草稿历史不转成已安装版本。
 
 站点解析优先使用浏览器的 `chrome.publicSuffix.getDomain()`，使用 `publicSuffix` 扩展权限；原生接口不可用、无结果或调用失败时，回退到随扩展打包的 `tldts` PSL（包含私有后缀）。保持 IP、localhost 的主机名兜底，无需联网获取规则，也不提高 Chromium 最低版本。
 
@@ -262,7 +264,7 @@ IndexedDB 使用 Agent 自己的数据库名和 schema 迁移，保存以下数�
 | --- | --- |
 | workspaces | 按站点（eTLD+1）共享的工作区、文件与脚本 ID 绑定 |
 | sessions | 归属站点工作区的对话、目标信息、任务基线 |
-| files 与 revisions | 文件正文、修订、时间和本轮变更基线 |
+| files | 文件当前正文、并发修订号和时间；不保存工作区历史快照 |
 | conversations 与 runs | SDK 消息、执行状态、用户队列 |
 | operations | 操作 ID、开始、结束、失败和结果未知状态 |
 | artifacts | 截图、DOM 快照和按需保存的调试结果 |
@@ -292,6 +294,8 @@ interface ScriptStoreAdapter {
   get(id: string): Promise<ScriptSnapshot>;
   save(input: { id?: string; code: string }): Promise<ScriptSnapshot>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  history(id: string): Promise<ScriptVersionInfo[]>;
+  version(id: string, versionId: string): Promise<ScriptVersion>;
 }
 ```
 
@@ -301,7 +305,7 @@ Monkey 侧保存仍走自己的元数据解析、安装和依赖处理流程。�
 
 当前仓库已有 [GetScriptCode 和 ParseScript](../src/background/utils/db.js) 等入口。适配器可在后台调用这些能力，内部实现细节只存在于 Monkey 侧。当前 [reloadTabForScript](../src/background/utils/tabs.js) 按活动标签页刷新；Agent 通过自己的 BrowserSession 刷新绑定的被检查页面。
 
-Agent 的 ScriptService 在这四个接口之上实现：
+Agent 的 ScriptService 在这些接口之上实现：
 
 ```ts
 scripts.list();
@@ -311,7 +315,7 @@ scripts.status(path);
 scripts.setEnabled(path, enabled);
 ```
 
-import 将脚本代码和基线修订保存到工作区。apply 读取文件，通过适配器保存，并记录文件修订与返回的脚本 ID。更新已有脚本前重读 Monkey 版本；发现相对导入基线的外部修改时停止覆盖并展示冲突。四方法接口的前置重读属于冲突检测，不能保证与 Monkey 自带编辑器的写入原子互斥；若后续需要严格的并发更新保证，再为宿主接口增加原子版本检查。
+import 将脚本代码及当前安装修订保存到工作区。apply 读取文件，通过适配器保存，并记录文件修订与返回的脚本 ID。更新已有脚本前重读 Monkey 版本；发现相对已观察版本的外部修改时停止覆盖并展示冲突。保存接口的前置重读属于冲突检测，不能保证与 Monkey 自带编辑器的写入原子互斥。history/version 只读取指定 scriptId 的版本元数据及单个代码版本，供 Changes UI 使用，不增加 REPL 同名接口。恢复草稿校验 UI 已观察到的宿主修订，再更新该脚本的安装修订关联；恢复后若宿主又被修改，安装仍会拒绝覆盖。
 
 Monkey 接口通过独立命名的扩展内部消息通道提供，只接收 Agent 扩展页的请求，不挂到网页全局或 userscript 的可调用接口上。MockScriptStore 实现同一契约，用于前端开发和独立验证。
 
@@ -356,10 +360,12 @@ return { installed, verification };
 | 跨站导航 | 停止当前任务，切换目标站点的共享工作区与 session |
 | 用户取消浏览器调试 | 标记断开并停止依赖该连接的运行；显式重连后再继续 |
 | 关闭 F12 | 停止当前运行，保存已有文件和记录，释放调试会话 |
-| 重新打开 F12 | 恢复历史和工作区，新建调试会话，不自动重放上次工具 |
+| 重新打开 F12 | 恢复该标签页在当前站点上次选中的对话与工作区，重建浏览器调试连接，不自动重放上次工具 |
 | 多个 DevTools 窗口 | 按 tabId 隔离 BrowserSession，工作区写入仍检查修订 |
 
 Agent 自带一个很小的后台生命周期模块。DevTools 页面建立命名 Port，后台在 Port 断开时清理该会话的调试连接，避免仅依赖页面 unload。该模块与 Monkey 脚本适配器分开，不承载 Agent loop 或模型请求。
+
+工作区单独持久化每个 tabId 的最近会话选择，不用 session 当前的 targetTabId 充当唯一历史关联。恢复时先使用该选择，再兼容旧版同 tabId 记录；原标签页已关闭时，按相同 URL 优先恢复其历史。快速重开同标签页 DevTools 时等待旧 renderer 释放 Web Lock，不因短暂占用创建空白会话；其他标签页仍持有会话时保留独占。脚本版本恢复在草稿保存/冲突处理及版本加载完成后才可用；恢复校验已观察到的宿主版本及当前文件 revision，后续安装继续拒绝新发生的外部修改。
 
 ## 工程目录与扩展集成
 
@@ -372,7 +378,7 @@ packages/devtools-agent/
     panel/             React 页面和业务容器
     components/        引入的开源组件及来源说明
     agent/             AI SDK 配置、文件工具、REPL 与内置 Markdown 指南
-    workspace/         IndexedDB 文件和修订服务
+    workspace/         IndexedDB 当前文件服务
     repl/              QuickJS Worker 与宿主函数
     browser/           chrome.debugger 会话和事件
     scripts/           ScriptStoreAdapter 契约与 ScriptService
@@ -401,7 +407,7 @@ src/background/utils/agent-script-api.js  Monkey 侧适配器
 | 2 对话与工作区 | AI SDK loop、模型设置、聊天组件、标准文件工具、文件树、编辑器和持久化 | 用户可对话创建和修改脚本；停止有效；关闭 F12 后文件和消息可恢复 |
 | 3 浏览器 REPL | fs 与 browser 对象、事件缓冲、上下文、日志、截图和调试抽屉 | Agent 可组合多步网页操作；刷新后能继续；错误结果可进入下一轮推理 |
 | 4 Monkey 接入 | 四方法适配器、导入、安装、启停、脚本与文件绑定 | 真实完成编写、安装、刷新、验证、修复；同名创建不覆盖；目标标签页正确 |
-| 5 完整交互与回归 | 变更页、恢复、消息队列、窄屏、错误和重连状态 | 人工编辑冲突不丢内容；面板切换不丢任务；异常中断不重放副作用 |
+| 5 完整交互与回归 | 脚本差异、版本载入、消息队列、窄屏、错误和重连状态 | 人工编辑冲突不丢内容；面板切换不丢任务；异常中断不重放副作用 |
 
 第一阶段用目标 Chrome 版本实测 F12 与调试附加的共存，包括先打开 F12 再附加、切换内置面板、停靠方式变化和关闭后的清理。官方多客户端说明与 debugger API 中的断开描述存在差异，因此该项是进入完整实现前的运行验证，不以文档推断代替。[多客户端说明](https://developer.chrome.com/blog/new-in-devtools-63#multi-client-remote-debugging-support)、[断开事件说明](https://developer.chrome.com/docs/extensions/reference/api/debugger#event-onDetach)。
 
