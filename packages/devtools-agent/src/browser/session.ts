@@ -2,6 +2,7 @@ import { AgentError } from '../protocol/errors';
 import type { BrowserEvent } from '../protocol/types';
 import type { WorkspaceService } from '../workspace/service';
 import { PageSources } from './sources';
+import { evaluationExceptionMessage, type EvaluationException } from './evaluate-error';
 
 interface EventQuery {
   after?: number;
@@ -171,13 +172,10 @@ export class BrowserSession {
       options.sessionId,
     )) as {
       result: { value?: unknown; unserializableValue?: string; description?: string };
-      exceptionDetails?: { text: string; exception?: { description?: string } };
+      exceptionDetails?: EvaluationException;
     };
     if (result.exceptionDetails)
-      throw new AgentError(
-        'page_exception',
-        result.exceptionDetails.exception?.description ?? result.exceptionDetails.text,
-      );
+      throw new AgentError('page_exception', evaluationExceptionMessage(result.exceptionDetails));
     return result.result.value ?? result.result.unserializableValue ?? null;
   }
   async contexts() {

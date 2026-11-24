@@ -6,6 +6,7 @@ import {
   type QuickJSWASMModule,
 } from 'quickjs-emscripten-core';
 import { AgentError, errorData } from '../protocol/errors';
+import { REPL_FILENAME, wrapReplCode, replSyntaxErrorMessage } from './syntax-error';
 import type { ToolResult } from '../protocol/types';
 
 export type HostCall = (method: string, args: unknown[], signal?: AbortSignal) => Promise<unknown>;
@@ -136,8 +137,10 @@ export class ReplRuntime {
     this.deadline = Date.now() + timeoutMs;
     let handle: QuickJSHandle | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
+    let compileFailed = false;
     try {
-      const result = this.vm.evalCode(`(async () => {\n${code}\n})()`, 'agent-repl.js');
+      const result = this.vm.evalCode(wrapReplCode(code), REPL_FILENAME);
+      compileFailed = !!result.error;
       handle = this.vm.unwrapResult(result);
       const resolved = this.vm.resolvePromise(handle);
       timer = setInterval(() => {
@@ -170,6 +173,8 @@ export class ReplRuntime {
         value.dispose();
       }
     } catch (error) {
+      if (compileFailed && error instanceof Error)
+        error.message = replSyntaxErrorMessage(error, code);
       const message = error instanceof Error ? error.message : String(error);
       const missing = message.match(
         /['"](__hosts__|setTimeout|setInterval|document|window|fetch|chrome|process|require)['"] is not defined/,
