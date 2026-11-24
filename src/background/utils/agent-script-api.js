@@ -1,8 +1,9 @@
 import { getScriptById, getScripts, parseScript, updateScriptInfo } from './db';
 import { addOwnCommands } from './init';
 import storage from './storage';
+import { getScriptHistory, getScriptVersion } from './script-history';
 
-// The Agent owns its runtime. This adapter is intentionally limited to four script operations.
+// The Agent owns its runtime; script versions are owned by the host save path.
 const namespace = 'monkeyagent:scripts:v1';
 const agentRoot = chrome.runtime.getURL('agent/');
 const summary = script => ({
@@ -32,10 +33,16 @@ addOwnCommands({
     switch (op) {
       case 'list': return getScripts().map(summary);
       case 'get': return snapshot(args.id);
+      case 'history': find(args.id); return getScriptHistory(+args.id);
+      case 'version': {
+        find(args.id);
+        if (typeof args.versionId !== 'string') throw new Error('Invalid script version.');
+        return getScriptVersion(+args.id, args.versionId);
+      }
       case 'save': {
         if (typeof args.code !== 'string' || args.code.length > 2 * 1024 * 1024) throw new Error('Invalid script code.');
         if (args.id != null) find(args.id);
-        const result = await parseScript({ code: args.code, id: args.id == null ? undefined : +args.id, isNew: args.id == null, reloadTab: false });
+        const result = await parseScript({ code: args.code, id: args.id == null ? undefined : +args.id, isNew: args.id == null, reloadTab: false, historySource: 'agent' });
         return snapshot(`${result.where.id}`);
       }
       case 'setEnabled': {

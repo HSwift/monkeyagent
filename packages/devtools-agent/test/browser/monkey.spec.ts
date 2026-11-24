@@ -121,6 +121,27 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
     await api('setEnabled', { id: scriptId, enabled: true });
     await target.reload();
     await expect(target.locator('#agent-proof')).toBeVisible();
+    const initialHistory = (await api('history', { id: scriptId }))[0];
+    expect(initialHistory).toHaveLength(1);
+    expect(initialHistory[0]).toMatchObject({ source: 'agent' });
+    expect(initialHistory[0].code).toBeUndefined();
+    const nextCode = code + '\n// agent saved version';
+    expect((await api('save', { id: scriptId, code: nextCode }))[1]).toBeFalsy();
+    expect((await api('save', { id: scriptId, code: nextCode }))[1]).toBeFalsy();
+    const manual = await evaluate(
+      `chrome.runtime.sendMessage(${JSON.stringify({ cmd: 'ParseScript', data: { id: +scriptId, code: code + '\n// editor saved version', isNew: false, historySource: 'editor' } })})`,
+    );
+    expect(manual[1]).toBeFalsy();
+    const versions = (await api('history', { id: scriptId }))[0];
+    expect(versions.map((version: any) => version.source)).toEqual(['editor', 'agent', 'agent']);
+    expect((await api('version', { id: scriptId, versionId: initialHistory[0].id }))[0].code).toBe(
+      code,
+    );
+    const persisted = await worker.evaluate(
+      async (key) => (await chrome.storage.local.get(key))[key],
+      `script-history:${scriptId}`,
+    );
+    expect(persisted).toHaveLength(3);
   } finally {
     await context.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

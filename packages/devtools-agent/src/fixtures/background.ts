@@ -16,7 +16,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
           ? store.save(args)
           : op === 'setEnabled'
             ? store.setEnabled(args.id, args.enabled)
-            : Promise.reject(new Error('Unknown script operation.'));
+            : op === 'history'
+              ? store.history(args.id)
+              : op === 'version'
+                ? store.version(args.id, args.versionId)
+                : Promise.reject(new Error('Unknown script operation.'));
   task.then(
     (value) => respond({ value }),
     (error) => respond({ error: { code: error.code ?? 'host_error', message: error.message } }),

@@ -176,7 +176,7 @@ export class WorkspaceService {
     path = this.writable(path);
     if (typeof content !== 'string' || content.length > 2 * 1024 * 1024)
       throw new AgentError('size_limit', 'Text files are limited to 2 MiB.');
-    const tx = this.db.transaction(['files', 'revisions', 'workspaces'], 'readwrite');
+    const tx = this.db.transaction(['files', 'workspaces'], 'readwrite');
     const old = await tx.objectStore('files').get(this.key(path));
     if ((old?.revision ?? undefined) !== expectedRevision) {
       await tx.done;
@@ -194,7 +194,6 @@ export class WorkspaceService {
       updatedAt: Date.now(),
     };
     await tx.objectStore('files').put(record);
-    await tx.objectStore('revisions').put({ ...record, key: record.revision });
     const meta = await tx.objectStore('workspaces').get(this.id);
     if (meta) {
       meta.updatedAt = record.updatedAt;
@@ -237,7 +236,7 @@ export class WorkspaceService {
   async rename(path: string, to: string, expectedRevision: string) {
     path = this.writable(path);
     to = this.writable(to);
-    const tx = this.db.transaction(['files', 'revisions', 'workspaces'], 'readwrite');
+    const tx = this.db.transaction(['files', 'workspaces'], 'readwrite');
     const old = await tx.objectStore('files').get(this.key(path));
     const exists = await tx.objectStore('files').get(this.key(to));
     if (!old || old.revision !== expectedRevision || exists) {
@@ -253,7 +252,6 @@ export class WorkspaceService {
     };
     await tx.objectStore('files').delete(this.key(path));
     await tx.objectStore('files').put(file);
-    await tx.objectStore('revisions').put({ ...file, key: file.revision });
     const meta = await tx.objectStore('workspaces').get(this.id);
     if (meta) {
       if (meta.bindings[path]) {
@@ -295,11 +293,6 @@ export class WorkspaceService {
       }
     }
     return results;
-  }
-  async revision(revision: string): Promise<FileRecord | undefined> {
-    const file = await this.db.get('revisions', revision);
-    if (file?.workspaceId !== this.id) return;
-    return file;
   }
   async artifact(blob: Blob, name = 'artifact'): Promise<ArtifactRef> {
     const id = crypto.randomUUID();

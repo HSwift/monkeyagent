@@ -122,7 +122,7 @@ test('internal console export reads a session and its site workspace without cha
       ),
     ).toBe(true);
     expect(trace.files[0].content).toBe('second revision');
-    expect(trace.revisions).toHaveLength(2);
+    expect(trace.revisions).toBeUndefined();
     expect(trace.artifacts.find((item: any) => item.id === 'text').text).toContain('[REDACTED]');
     expect(trace.artifacts.find((item: any) => item.id === 'image').contentOmitted).toBeTruthy();
     expect(trace.configurationAtExport.model).toBe('test-model');

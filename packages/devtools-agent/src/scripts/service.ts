@@ -28,7 +28,6 @@ export class ScriptService {
       scriptId: id,
       scriptRevision: script.revision,
       fileRevision: file.revision,
-      installedCode: script.code,
       enabled: script.enabled,
     });
     return file;
@@ -43,7 +42,6 @@ export class ScriptService {
       scriptId: script.id,
       scriptRevision: script.revision,
       fileRevision: file.revision,
-      installedCode: file.content,
       enabled: script.enabled,
     });
     return script;
@@ -60,10 +58,9 @@ export class ScriptService {
         verification: null,
       };
     const current = await this.adapter.get(binding.scriptId);
-    const { installedCode: _, ...summary } = binding;
     const externalChanged = current.revision !== binding.scriptRevision;
     return {
-      ...summary,
+      ...binding,
       state: file.revision === binding.fileRevision ? 'installed' : 'modified',
       workspaceRevision: file.revision,
       currentScriptRevision: current.revision,
@@ -90,6 +87,51 @@ export class ScriptService {
       verification: undefined,
     });
     return { enabled: script.enabled };
+  }
+  private async boundScript(path: string) {
+    const file = await this.workspace.read(path);
+    const binding = (await this.workspace.metadata()).bindings[file.path];
+    if (!binding) throw new AgentError('not_installed', 'Install or import this userscript first.');
+    return binding.scriptId;
+  }
+  async history(path: string) {
+    const id = await this.boundScript(path);
+    return {
+      script: installedSummary(await this.adapter.get(id)),
+      versions: await this.adapter.history(id),
+    };
+  }
+  async version(path: string, versionId: string) {
+    const id = await this.boundScript(path);
+    return versionId === 'current'
+      ? { code: (await this.adapter.get(id)).code }
+      : this.adapter.version(id, versionId);
+  }
+  /** Explicit UI restore: acknowledge the observed host revision, never an unseen edit. */
+  async restore(
+    path: string,
+    versionId: string,
+    expectedFileRevision: string,
+    expectedScriptRevision: string,
+  ) {
+    const id = await this.boundScript(path);
+    const current = await this.adapter.get(id);
+    if (current.revision !== expectedScriptRevision)
+      throw new AgentError(
+        'external_conflict',
+        'The installed script changed. Refresh its history before restoring.',
+      );
+    const version = versionId === 'current' ? current : await this.adapter.version(id, versionId);
+    const file = await this.workspace.write(path, version.code, expectedFileRevision);
+    const binding = (await this.workspace.metadata()).bindings[file.path];
+    await this.workspace.bind(file.path, {
+      ...binding,
+      scriptRevision: current.revision,
+      fileRevision: current.code === file.content ? file.revision : binding.fileRevision,
+      enabled: current.enabled,
+      verification: undefined,
+    });
+    return file;
   }
   async verify(path: string, passed: boolean, detail: string) {
     const file = await this.workspace.read(path);

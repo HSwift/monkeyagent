@@ -50,12 +50,17 @@ test('stopping cancels queued tools, records uncertain outcomes and never replay
     frame = page.frames().find((frame) => frame.url().endsWith('/agent/panel.html'))!;
     const restored = await rpc(frame, 'snapshot');
     expect(restored.files).toHaveLength(0);
-    expect(restored.operations.filter((op: any) => op.status === 'unknown')).toHaveLength(1);
     expect(
-      restored.operations.some(
-        (op: any) => op.status === 'failed' && op.output.error.message.includes('interrupted'),
-      ),
-    ).toBe(true);
+      restored.operations
+        .filter((op: any) => op.status === 'unknown')
+        .map((op: any) => op.output.error.code)
+        .sort(),
+    ).toEqual(['aborted', 'timeout']);
+    // A cancelled queued call never starts an operation; neither dispatched call is replayed.
+    expect(restored.operations).toHaveLength(3);
+    expect(
+      restored.operations.some((op: any) => op.input.code.includes('/workspace/queued.js')),
+    ).toBe(false);
   } finally {
     await context.close();
   }
@@ -98,16 +103,26 @@ test('human drafts survive agent conflicts, diff restoration and narrow workspac
     await expect(editor).toContainText('human draft');
     expect((await rpc(frame, 'files.read', path)).content).toContain('agent draft');
     await panel.getByRole('button', { name: 'Changes', exact: true }).click();
+    await expect(
+      panel.getByRole('button', { name: 'Restore to editor', exact: true }),
+    ).toBeDisabled();
     await panel.getByRole('button', { name: 'Files', exact: true }).click();
     await expect(editor).toContainText('human draft');
     await panel.getByRole('button', { name: 'Overwrite with this draft', exact: true }).click();
     await expect.poll(async () => (await rpc(frame, 'files.read', path)).content).toBe(human);
     await panel.getByRole('button', { name: 'Changes', exact: true }).click();
-    await panel.getByLabel('Diff baseline').selectOption('installed');
-    await panel.getByRole('button', { name: 'Restore baseline', exact: true }).click();
+    await panel.getByRole('button', { name: 'Restore to editor', exact: true }).click();
     await expect.poll(async () => (await rpc(frame, 'files.read', path)).content).toBe(original);
     const restored = await rpc(frame, 'files.read', path);
     expect(restored.revision).not.toBe(file.revision);
+    // Updates while Changes stays open must not leave restoration disabled after editor sync.
+    await rpc(frame, 'files.write', path, original + '\n// later agent edit', restored.revision);
+    await expect(panel.locator('.changes-pane')).toContainText('later agent edit');
+    await expect(
+      panel.getByRole('button', { name: 'Restore to editor', exact: true }),
+    ).toBeEnabled();
+    await panel.getByRole('button', { name: 'Restore to editor', exact: true }).click();
+    await expect.poll(async () => (await rpc(frame, 'files.read', path)).content).toBe(original);
     await page.setViewportSize({ width: 420, height: 800 });
     await expect(panel.locator('#tool-drawer')).toBeVisible();
     await panel.getByRole('button', { name: 'Files', exact: true }).click();

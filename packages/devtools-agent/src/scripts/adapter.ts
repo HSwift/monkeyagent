@@ -1,4 +1,10 @@
-import type { ScriptSnapshot, ScriptStoreAdapter, ScriptSummary } from '../protocol/types';
+import type {
+  ScriptSnapshot,
+  ScriptStoreAdapter,
+  ScriptSummary,
+  ScriptVersion,
+  ScriptVersionInfo,
+} from '../protocol/types';
 import { AgentError } from '../protocol/errors';
 
 /** This transport is the only dependency on the host extension. */
@@ -30,5 +36,11 @@ export class ExtensionScriptStore implements ScriptStoreAdapter {
   }
   setEnabled(id: string, enabled: boolean) {
     return this.call<void>('setEnabled', { id, enabled });
+  }
+  history(id: string) {
+    return this.call<ScriptVersionInfo[]>('history', { id });
+  }
+  version(id: string, versionId: string) {
+    return this.call<ScriptVersion>('version', { id, versionId });
   }
 }

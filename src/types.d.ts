@@ -304,6 +304,7 @@ declare interface VMScriptSourceOptions extends DeepPartial<Omit<VMScript, 'infe
   url?: string;
 
   bumpDate?: boolean;
+  historySource?: 'agent' | 'editor';
   fetchOpts?: object;
   force?: boolean;
   message?: string;

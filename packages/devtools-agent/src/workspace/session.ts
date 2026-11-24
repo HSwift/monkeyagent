@@ -1,5 +1,5 @@
 import type { AgentDB } from './database';
-import type { FileRecord, ContextCheckpoint, SessionRecord } from '../protocol/types';
+import type { ContextCheckpoint, SessionRecord } from '../protocol/types';
 import { AgentError } from '../protocol/errors';
 import { siteWorkspaceId } from './site';
 
@@ -32,7 +32,6 @@ export class SessionService {
       targetTabId,
       title: DEFAULT_SESSION_TITLE,
       updatedAt: Date.now(),
-      baseline: {},
     });
     return new SessionService(db, id);
   }
@@ -52,7 +51,7 @@ export class SessionService {
     return withEnglishDefaultTitle(this.db, session);
   }
 
-  async patch(patch: Partial<Pick<SessionRecord, 'title' | 'targetUrl' | 'targetTabId' | 'baseline'>>) {
+  async patch(patch: Partial<Pick<SessionRecord, 'title' | 'targetUrl' | 'targetTabId'>>) {
     const tx = this.db.transaction('sessions', 'readwrite');
     const session = await tx.store.get(this.id);
     if (!session) throw new AgentError('not_found', 'Session not found.');
@@ -86,10 +85,5 @@ export class SessionService {
       throw new AgentError('context_changed', 'The conversation changed during compaction.');
     await tx.store.put({ ...session, context, updatedAt: Date.now() });
     await tx.done;
-  }
-  async captureBaseline(files: FileRecord[]) {
-    await this.patch({
-      baseline: Object.fromEntries(files.map((file) => [file.path, file.revision])),
-    });
   }
 }

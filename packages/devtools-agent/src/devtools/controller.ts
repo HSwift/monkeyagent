@@ -412,15 +412,17 @@ export class Controller {
         return this.workspace.remove(...(args as [string, string]));
       case 'files.read':
         return this.workspace.read(...(args as [string, { offset?: number; limit?: number }?]));
-      case 'files.baseline': {
-        const [path, mode] = args as [string, string];
-        if (mode === 'installed')
-          return (await this.workspace.metadata()).bindings[path]?.installedCode ?? '';
-        const meta = await this.session.metadata();
-        return meta.baseline[path]
-          ? ((await this.workspace.revision(meta.baseline[path]))?.content ?? '')
-          : '';
-      }
+      case 'scripts.history':
+        return this.scripts.history(args[0] as string);
+      case 'scripts.version':
+        return this.scripts.version(args[0] as string, args[1] as string);
+      case 'scripts.restore':
+        return this.scripts.restore(
+          args[0] as string,
+          args[1] as string,
+          args[2] as string,
+          args[3] as string,
+        );
       case 'scripts.list':
         return this.scripts.list();
       case 'scripts.status':
@@ -536,7 +538,6 @@ export class Controller {
     };
     let failed = false;
     try {
-      await this.session.captureBaseline(await this.workspace.allFiles());
       await this.persistMessages();
       await this.saveRun();
       const lastText =

@@ -30,18 +30,29 @@ export interface ScriptSnapshot extends ScriptSummary {
   code: string;
   revision: string;
 }
+export interface ScriptVersionInfo {
+  id: string;
+  createdAt: number;
+  source: string;
+  version: string | null;
+  size: number;
+}
+export interface ScriptVersion extends ScriptVersionInfo {
+  code: string;
+}
 export interface ScriptStoreAdapter {
   list(): Promise<ScriptSummary[]>;
   get(id: string): Promise<ScriptSnapshot>;
   save(input: { id?: string; code: string }): Promise<ScriptSnapshot>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+  history(id: string): Promise<ScriptVersionInfo[]>;
+  version(id: string, versionId: string): Promise<ScriptVersion>;
 }
 export interface ScriptBinding {
   path: string;
   scriptId: string;
   scriptRevision: string;
   fileRevision: string;
-  installedCode: string;
   enabled: boolean;
   verification?: { passed: boolean; detail: string; at: number };
 }
@@ -60,7 +71,6 @@ export interface SessionRecord {
   targetUrl: string;
   targetTabId?: number;
   updatedAt: number;
-  baseline: Record<string, string>;
   context?: ContextCheckpoint;
 }
 export interface ContextCheckpoint {

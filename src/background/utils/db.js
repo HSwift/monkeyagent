@@ -33,6 +33,7 @@ import storage, {
 import { storageCacheHas, storageChanging } from './storage-cache';
 import { reloadTabForScript } from './tabs';
 import { vetUrl } from './url';
+import { saveScriptVersion, scriptHistoryKey } from './script-history';
 
 let maxScriptId = 0;
 let maxScriptPosition = 0;
@@ -572,7 +573,7 @@ export async function removeScripts(ids) {
   const newLen = 1 + removedScripts.reduce((iAlive, script, i) => {
     const id = getPropsId(script);
     if (ids.includes(id)) {
-      idsToRemove.push(S_CODE_PRE + id, S_SCRIPT_PRE + id, S_VALUE_PRE + id);
+      idsToRemove.push(S_CODE_PRE + id, S_SCRIPT_PRE + id, S_VALUE_PRE + id, scriptHistoryKey(id));
       delete scriptMap[id];
     } else if (++iAlive < i) removedScripts[iAlive] = script;
     return iAlive;
@@ -661,6 +662,7 @@ export async function parseScript(src) {
   let { id } = src;
   let script;
   let oldScript = getScript({ id, meta });
+  const previousAt = oldScript?.props.lastModified;
   if (oldScript) {
     script = oldScript;
     id = script.props.id;
@@ -724,10 +726,8 @@ export async function parseScript(src) {
   if (codeChanged && src.bumpDate) props.lastUpdated = now;
   // Installer has all the deps, so we'll put them in storage first
   if (src.cache) await depsPromise;
-  await storage.api.set({
-    [S_SCRIPT_PRE + id]: script,
-    ...codeChanged && { [S_CODE_PRE + id]: code },
-  });
+  await saveScriptVersion(id, code, { [S_SCRIPT_PRE + id]: script },
+    src.historySource || (src.update ? 'update' : 'install'), previousAt);
   inferScriptProps(script);
   Object.assign(update, script, srcUpdate);
   result.where = { id };

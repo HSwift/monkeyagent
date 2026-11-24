@@ -7,14 +7,13 @@ type LegacySession = Omit<SessionRecord, 'workspaceId'> & {
   bindings: Record<string, ScriptBinding>;
 };
 
-/** Keep old conversations and revisions; preserve conflicting files as named copies. */
+/** Keep conversations and current files; preserve conflicting files as named copies. */
 export async function migrateSessions(
   tx: IDBPTransaction<Schema, StoreNames<Schema>[], 'versionchange'>,
 ) {
-  const [legacy, files, revisions, runs, operations, artifacts] = await Promise.all([
+  const [legacy, files, runs, operations, artifacts] = await Promise.all([
     tx.objectStore('workspaces').getAll() as unknown as Promise<LegacySession[]>,
     tx.objectStore('files').getAll(),
-    tx.objectStore('revisions').getAll(),
     tx.objectStore('runs').getAll(),
     tx.objectStore('operations').getAll(),
     tx.objectStore('artifacts').getAll(),
@@ -36,7 +35,6 @@ export async function migrateSessions(
   await tx.objectStore('workspaces').clear();
   await tx.objectStore('files').clear();
   const current = new Map<string, StoredFile>();
-  const paths = new Map<string, string>();
   for (const file of files.sort(
     (a, b) => b.updatedAt - a.updatedAt || a.key.localeCompare(b.key),
   )) {
@@ -53,7 +51,6 @@ export async function migrateSessions(
       } while (current.has(`${workspaceId}:${path}`));
       canonical = undefined;
     }
-    paths.set(`${file.workspaceId}:${file.path}`, path);
     if (!canonical) {
       canonical = { ...file, workspaceId, path, key: `${workspaceId}:${path}` };
       current.set(canonical.key, canonical);
@@ -71,29 +68,10 @@ export async function migrateSessions(
   }
   for (const workspace of workspaces.values()) await tx.objectStore('workspaces').put(workspace);
   for (const { bindings: _, ...session } of legacy) {
-    await tx
-      .objectStore('sessions')
-      .put({
-        ...session,
-        workspaceId: owners.get(session.id)!,
-        baseline: Object.fromEntries(
-          Object.entries(session.baseline ?? {}).map(([path, revision]) => [
-            paths.get(`${session.id}:${path}`) ?? path,
-            revision,
-          ]),
-        ),
-      });
-  }
-  for (const revision of revisions) {
-    const workspaceId = owners.get(revision.workspaceId);
-    if (workspaceId)
-      await tx
-        .objectStore('revisions')
-        .put({
-          ...revision,
-          workspaceId,
-          path: paths.get(`${revision.workspaceId}:${revision.path}`) ?? revision.path,
-        });
+    await tx.objectStore('sessions').put({
+      ...session,
+      workspaceId: owners.get(session.id)!,
+    });
   }
   for (const [store, records] of [
     ['runs', runs],

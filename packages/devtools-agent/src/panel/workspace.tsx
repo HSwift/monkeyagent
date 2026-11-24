@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  FileCode2,
   ChevronDown,
   ChevronRight,
-  FileCode2,
   FolderOpen,
   Plus,
   Pencil,
@@ -16,11 +16,17 @@ import {
 import { Button, IconButton, Modal, Scroller } from '../components/ui';
 import { CodeEditor, DiffEditor } from '../components/code-editor';
 import type { ControllerClient } from '../protocol/client';
-import type { FileRecord, ScriptSummary, Snapshot, ToolResult } from '../protocol/types';
+import type {
+  FileRecord,
+  ScriptSummary,
+  ScriptVersionInfo,
+  Snapshot,
+  ToolResult,
+} from '../protocol/types';
 import { DebugPane } from './debug';
 import { ReadonlyFileViewer } from './artifact';
-
 type Attachment = { path: string; content: string; selection: string };
+type EditorDraftStatus = { path: string; revision: string; pending: boolean };
 export type WorkspaceView = 'files' | 'changes' | 'debug';
 const VIEW_LABELS: Record<WorkspaceView, string> = {
   files: 'Files',
@@ -59,6 +65,7 @@ export function WorkspacePane({
   const [scriptId, setScriptId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [draftStatus, setDraftStatus] = useState<EditorDraftStatus>();
   const closeButton = useRef<HTMLButtonElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -255,12 +262,17 @@ export function WorkspacePane({
                   snapshot={snapshot}
                   client={client}
                   report={report}
+                  onDraftStatus={setDraftStatus}
                   showDiff={() => setView('changes')}
                   attach={attach}
                 />
               </>
             ) : selectedPath.startsWith('/artifacts/') ? (
-              <ReadonlyFileViewer key={selectedPath} path={selectedPath} client={client}/>
+              <ReadonlyFileViewer
+                key={`${snapshot.workspace.id}:${selectedPath}`}
+                path={selectedPath}
+                client={client}
+              />
             ) : (
               <div className="empty-workspace">
                 <FileCode2 size={30} />
@@ -284,16 +296,15 @@ export function WorkspacePane({
         </div>
       </div>
       <div className="workspace-content" hidden={view !== 'changes'}>
-        {file ? (
+        {view === 'changes' && (
           <Changes
-            key={`${snapshot.session.id}:${file.path}`}
             client={client}
-            file={file}
             snapshot={snapshot}
             report={report}
+            draftStatus={draftStatus}
+            selectedPath={selectedPath}
+            selectFile={selectFile}
           />
-        ) : (
-          <div className="empty-workspace">Select a file to view changes</div>
         )}
       </div>
       <div className="workspace-content" hidden={view !== 'debug'}>
@@ -413,6 +424,7 @@ function FileEditor({
   report,
   showDiff,
   attach,
+  onDraftStatus,
 }: {
   file: FileRecord;
   snapshot: Snapshot;
@@ -420,6 +432,7 @@ function FileEditor({
   report: (error: unknown) => void;
   showDiff: () => void;
   attach: (value: Attachment) => void;
+  onDraftStatus: (status: EditorDraftStatus) => void;
 }) {
   const cacheKey = `${snapshot.workspace.id}:${file.path}`;
   const cached = editorDrafts.get(cacheKey);
@@ -438,6 +451,13 @@ function FileEditor({
   const savingRef = useRef(false);
   const binding = snapshot.workspace.bindings[file.path];
   const dirty = draft !== base.content;
+  useEffect(() => {
+    onDraftStatus({
+      path: file.path,
+      revision: base.revision,
+      pending: dirty || !!conflict || saving,
+    });
+  }, [file.path, base.revision, dirty, conflict, saving, onDraftStatus]);
   useEffect(() => {
     if (file.revision === baseRef.current.revision || savingRef.current) return;
     if (draftRef.current !== baseRef.current.content) setConflict(file);
@@ -565,7 +585,7 @@ function FileEditor({
           <Play size={13} />
           Refresh and inspect
         </Button>
-        <Button onClick={showDiff}>View diff</Button>
+        {binding && <Button onClick={showDiff}>Script changes</Button>}
         {binding && (
           <Button
             onClick={() =>
@@ -590,73 +610,180 @@ function FileEditor({
     </>
   );
 }
+
 function Changes({
   client,
-  file,
   snapshot,
   report,
+  draftStatus,
+  selectedPath,
+  selectFile,
 }: {
   client: ControllerClient;
-  file: FileRecord;
   snapshot: Snapshot;
   report: (error: unknown) => void;
+  draftStatus?: EditorDraftStatus;
+  selectedPath: string;
+  selectFile: (path: string) => void;
 }) {
-  const [mode, setMode] = useState('task');
-  const [before, setBefore] = useState('');
-  const [loaded, setLoaded] = useState(false);
+  const paths = Object.keys(snapshot.workspace.bindings).filter((path) =>
+    snapshot.files.some((file) => file.path === path),
+  );
+  const path = paths.includes(selectedPath) ? selectedPath : paths[0];
+  const file = snapshot.files.find((file) => file.path === path);
+  const binding = snapshot.workspace.bindings[path];
+  const [refresh, setRefresh] = useState(0);
+  const [selection, setSelection] = useState({ scriptId: '', versionId: 'current' });
+  const selected = selection.scriptId === binding?.scriptId ? selection.versionId : 'current';
+  const key = JSON.stringify([
+    snapshot.workspace.id,
+    binding?.scriptId,
+    binding?.scriptRevision,
+    refresh,
+  ]);
+  const [history, setHistory] = useState<{
+    key: string;
+    name: string;
+    revision: string;
+    versions: ScriptVersionInfo[];
+  }>();
+  const [baseline, setBaseline] = useState<{ key: string; code: string }>();
+  const [loading, setLoading] = useState(false);
+  const codeKey = JSON.stringify([key, selected]);
+  useEffect(() => {
+    if (path && path !== selectedPath) selectFile(path);
+  }, [path, selectedPath, selectFile]);
   useEffect(() => {
     let cancelled = false;
-    setLoaded(false);
+    if (!binding) return;
+    setLoading(true);
     client
-      .call<string>('files.baseline', file.path, mode)
-      .then((value) => {
-        if (cancelled) return;
-        setBefore(value);
-        setLoaded(true);
+      .call<{ script: ScriptSummary & { revision: string }; versions: ScriptVersionInfo[] }>(
+        'scripts.history',
+        path,
+      )
+      .then((result) => {
+        if (!cancelled) {
+          setHistory({
+            key,
+            name: result.script.name,
+            revision: result.script.revision,
+            versions: result.versions,
+          });
+          if (selected !== 'current' && !result.versions.some((version) => version.id === selected))
+            setSelection({ scriptId: binding.scriptId, versionId: 'current' });
+        }
       })
-      .catch(report);
+      .catch((error) => {
+        if (!cancelled) report(error);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
-  }, [
-    file.path,
-    mode,
-    snapshot.workspace.id,
-    snapshot.session.id,
-    snapshot.session.baseline[file.path],
-    snapshot.workspace.bindings[file.path]?.fileRevision,
-  ]);
+  }, [key, client, path]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!binding || history?.key !== key) return;
+    client
+      .call<{ code: string }>('scripts.version', path, selected)
+      .then((result) => {
+        if (!cancelled) setBaseline({ key: codeKey, code: result.code });
+      })
+      .catch((error) => {
+        if (!cancelled) report(error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [codeKey, history, client, path]);
+  if (!file || !binding)
+    return (
+      <div className="empty-workspace">
+        <h3>No installed userscript selected</h3>
+        <p>
+          Install or import a userscript to compare its saved versions with its working draft.
+          Ordinary workspace files have no version history.
+        </p>
+      </div>
+    );
+  const loaded = history?.key === key && baseline?.key === codeKey;
+  const pendingDraft =
+    draftStatus?.path === path && (draftStatus.pending || draftStatus.revision !== file.revision);
+  const before = loaded ? baseline.code : '';
   async function restore() {
-    await client.call('files.write', file.path, before, file.revision);
+    if (!loaded || pendingDraft) return;
+    await client.call('scripts.restore', file!.path, selected, file!.revision, history!.revision);
   }
   return (
     <div className="changes-pane">
       <div className="file-toolbar">
-        <span className="file-path">{file.path}</span>
+        <label>
+          Userscript{' '}
+          <select
+            aria-label="Userscript"
+            value={path}
+            onChange={(event) => selectFile(event.target.value)}
+          >
+            {paths.map((path) => (
+              <option key={path} value={path}>
+                {path.split('/').pop()}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button onClick={() => setRefresh((value) => value + 1)} disabled={loading}>
+          <RotateCcw size={12} /> Refresh history
+        </Button>
+      </div>
+      <div className="file-toolbar">
+        <span className="file-path">
+          {history?.key === key ? history.name : 'Loading userscript…'}
+        </span>
         <select
-          aria-label="Diff baseline"
-          value={mode}
-          onChange={(event) => setMode(event.target.value)}
+          aria-label="Script version"
+          value={selected}
+          disabled={history?.key !== key}
+          onChange={(event) =>
+            setSelection({ scriptId: binding.scriptId, versionId: event.target.value })
+          }
         >
-          <option value="task">Start of task</option>
-          <option value="installed">Last installed version</option>
+          <option value="current">Latest installed version</option>
+          {history?.key === key &&
+            history.versions.map((version) => (
+              <option key={version.id} value={version.id}>
+                {new Date(version.createdAt).toLocaleString('en-US')} ·{' '}
+                {version.version || 'No @version'} · {version.source} · {version.id.slice(0, 8)}
+              </option>
+            ))}
         </select>
         <Button
           onClick={() => void restore().catch(report)}
-          disabled={!loaded || before === file.content}
+          disabled={!loaded || pendingDraft || before === file.content}
+          title={
+            pendingDraft
+              ? 'Wait for the draft to save, or resolve its conflict in Files.'
+              : undefined
+          }
         >
-          <RotateCcw size={12} />
-          Restore baseline
+          Restore to editor
         </Button>
       </div>
       <div className="diff-labels">
-        <span>Baseline</span>
-        <span>Current workspace</span>
+        <span>Saved script version</span>
+        <span>Working script draft</span>
       </div>
-      <DiffEditor before={before} after={file.content} />
+      {loaded ? (
+        <DiffEditor before={before} after={file.content} />
+      ) : (
+        <p className="muted small">Loading script version…</p>
+      )}
       <p className="diff-note">
-        Restoring creates a new file revision. Install it and refresh the page to update the running
-        script.
+        History belongs to this installed userscript. Restore loads a version into its draft;
+        install to Monkey and reload the page to apply it. Only changed script saves create
+        versions; the latest 20 are kept.
       </p>
     </div>
   );

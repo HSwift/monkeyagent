@@ -12,7 +12,7 @@ import { createRedactor } from './redact';
 import { createZip, type ZipEntry } from './zip';
 
 export const DEBUG_PACK_FORMAT = 'monkeyagent-debug-pack';
-export const DEBUG_PACK_SCHEMA_VERSION = 3;
+export const DEBUG_PACK_SCHEMA_VERSION = 4;
 const MAX_TEXT_ARTIFACT = 2 * 1024 * 1024;
 const TRANSCRIPT_OUTPUT_LIMIT = 4000;
 
@@ -67,7 +67,9 @@ function artifactFile(meta: { id: string; path: string }) {
 }
 
 function truncate(text: string, limit = TRANSCRIPT_OUTPUT_LIMIT) {
-  return text.length > limit ? `${text.slice(0, limit)}\n… (${text.length - limit} more chars)` : text;
+  return text.length > limit
+    ? `${text.slice(0, limit)}\n… (${text.length - limit} more chars)`
+    : text;
 }
 
 function fence(text: string, language = '') {
@@ -116,7 +118,10 @@ function transcript(
         const output = part.errorText ?? part.output;
         if (output !== undefined)
           lines.push(
-            fence(truncate(typeof output === 'string' ? output : JSON.stringify(output, null, 2)), 'json'),
+            fence(
+              truncate(typeof output === 'string' ? output : JSON.stringify(output, null, 2)),
+              'json',
+            ),
             '',
           );
       }
@@ -129,37 +134,23 @@ export async function buildDebugPack(input: DebugPackInput): Promise<DebugPack> 
   const now = input.now ?? new Date();
   const { db, workspaceId, sessionId } = input;
   const tx = db.transaction(
-    ['workspaces', 'sessions', 'conversations', 'runs', 'operations', 'files', 'revisions', 'artifacts'],
+    ['workspaces', 'sessions', 'conversations', 'runs', 'operations', 'files', 'artifacts'],
     'readonly',
   );
-  const [workspace, session, conversation, runs, operations, files, revisions, artifacts] =
-    await Promise.all([
-      tx.objectStore('workspaces').get(workspaceId),
-      tx.objectStore('sessions').get(sessionId),
-      tx.objectStore('conversations').get(sessionId),
-      tx.objectStore('runs').index('sessionId').getAll(sessionId),
-      tx.objectStore('operations').index('sessionId').getAll(sessionId),
-      tx.objectStore('files').index('workspaceId').getAll(workspaceId),
-      tx.objectStore('revisions').index('workspaceId').getAll(workspaceId),
-      tx.objectStore('artifacts').index('workspaceId').getAll(workspaceId),
-    ]);
+  const [workspace, session, conversation, runs, operations, files, artifacts] = await Promise.all([
+    tx.objectStore('workspaces').get(workspaceId),
+    tx.objectStore('sessions').get(sessionId),
+    tx.objectStore('conversations').get(sessionId),
+    tx.objectStore('runs').index('sessionId').getAll(sessionId),
+    tx.objectStore('operations').index('sessionId').getAll(sessionId),
+    tx.objectStore('files').index('workspaceId').getAll(workspaceId),
+    tx.objectStore('artifacts').index('workspaceId').getAll(workspaceId),
+  ]);
   await tx.done;
   if (!workspace || !session) throw new Error('Session not found.');
   runs.sort((a, b) => a.startedAt - b.startedAt);
   operations.sort((a, b) => a.startedAt - b.startedAt);
   const messages = input.messages.length ? input.messages : (conversation?.messages ?? []);
-
-  // Revisions are shared by the site; keep the session baseline and those made during it.
-  const sessionStart = Math.min(
-    ...runs.map((run) => run.startedAt),
-    ...operations.map((operation) => operation.startedAt),
-    now.getTime(),
-  );
-  const baseline = new Set(Object.values(session.baseline));
-  const sessionRevisions = revisions
-    .filter((revision) => baseline.has(revision.revision) || revision.updatedAt >= sessionStart)
-    .sort((a, b) => a.updatedAt - b.updatedAt)
-    .map(({ key: _key, workspaceId: _workspaceId, ...revision }) => revision);
 
   // Only text artifacts of this session (large tool results); screenshots are listed, not included.
   const operationText = JSON.stringify(operations);
@@ -227,7 +218,6 @@ export async function buildDebugPack(input: DebugPackInput): Promise<DebugPack> 
     operations: operations.length,
     replRuns: replHistory.length,
     files: files.length,
-    revisions: sessionRevisions.length,
     artifacts: artifactEntries.filter((entry) => entry.text !== undefined).length,
     browserEvents: input.browser.events.length,
   };
@@ -242,19 +232,20 @@ export async function buildDebugPack(input: DebugPackInput): Promise<DebugPack> 
     layout: {
       'settings.json': 'Model configuration at export time (API key removed).',
       'agent/': 'System prompt, tool definitions and /docs guides as the agent sees them now.',
-      'session/': 'Session metadata, conversation, model input, runs, operations, REPL history, transcript.',
-      'workspace/': 'Script bindings, current files as real files, revisions, text artifacts.',
+      'session/':
+        'Session metadata, conversation, model input, runs, operations, REPL history, transcript.',
+      'workspace/': 'Script bindings, current files as real files, text artifacts.',
       'browser/': 'Inspected tab and the in-memory CDP event buffer (console, logs, network).',
     },
     limitations: [
-      'Extension-origin http.request traffic is outside the inspected tab CDP Network buffer; request/response evidence is included only when retained in REPL code/results, conversation, workspace or artifacts.',
       '/source is an ephemeral read-only view of browser-provided sources. Its index and cache are not exported automatically; explicitly saved source excerpts may appear in conversation, operations or workspace files.',
       'agent/instructions.md and tool definitions are rebuilt at export time; earlier runs may have used a different prompt, directory listing or extension version.',
       'Configuration is captured at export time, not per run. Runs record their own model in session/runs.json.',
       'Raw model HTTP streams and hidden reasoning are not persisted.',
       'browser/events.json holds only the current in-memory buffer (up to 2000 events / 2 MiB) since the debugger connected.',
+      'Extension-origin http.request traffic is outside the inspected tab CDP Network buffer; request/response evidence is included only when retained in REPL code/results, conversation, workspace or artifacts.',
       'Screenshots and other binary artifacts are not exported; text artifacts are included up to 2 MiB each.',
-      'Workspace files and revisions are shared by all sessions of the site; revisions are limited to the session baseline and those made during the session.',
+      'Workspace files are shared by sessions of the site. Script version history belongs to Monkey and is not included in this workspace export.',
       'Common credentials and the configured model key are redacted. Scripts and page data are otherwise included; review before sharing.',
     ],
   };
@@ -295,7 +286,6 @@ export async function buildDebugPack(input: DebugPackInput): Promise<DebugPack> 
         })),
       ),
     },
-    { name: 'workspace/revisions.json', data: json(redact.value(sessionRevisions)) },
     {
       name: 'workspace/artifacts.json',
       data: json(

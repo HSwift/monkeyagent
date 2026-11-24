@@ -366,6 +366,7 @@ async function save() {
       isNew: !id,
       message: '',
       bumpDate: true,
+      historySource: 'editor',
     });
     const newId = res.where.id;
     const newScript = res.update;

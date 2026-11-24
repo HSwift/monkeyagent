@@ -7,6 +7,34 @@ import { ScriptService, installedSummary } from '../src/scripts/service';
 
 const code =
   '// ==UserScript==\n// @name Test\n// @namespace tests\n// @version 1.2.3\n// @match https://example.com/*\n// ==/UserScript==\n';
+it('restores only an observed script version into a guarded draft and preserves unseen edits', async () => {
+  const db = await openAgentDB(crypto.randomUUID());
+  try {
+    const fs = await WorkspaceService.create(db, 'https://example.com');
+    const adapter = new MockScriptStore(),
+      scripts = new ScriptService(fs, adapter);
+    const file = await fs.write('/workspace/main.user.js', code);
+    const installed = await scripts.apply(file.path);
+    const first = (await scripts.history(file.path)).versions[0];
+    const outside = await adapter.save({ id: installed.id, code: code + '// native editor' });
+    await expect(
+      scripts.restore(file.path, first.id, file.revision, installed.revision),
+    ).rejects.toMatchObject({ code: 'external_conflict' });
+    const edited = await fs.write(file.path, code + '// another draft', file.revision);
+    await expect(
+      scripts.restore(file.path, first.id, file.revision, outside.revision),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    const restored = await scripts.restore(file.path, first.id, edited.revision, outside.revision);
+    expect(restored.content).toBe(code);
+    expect((await adapter.get(installed.id)).code).toContain('native editor');
+    expect((await scripts.history(file.path)).versions).toHaveLength(2);
+    await scripts.apply(file.path);
+    expect((await adapter.get(installed.id)).code).toBe(code);
+    expect((await scripts.history(file.path)).versions).toHaveLength(3);
+  } finally {
+    db.close();
+  }
+});
 it('separates workspace save, installation and verification and detects external edits', async () => {
   const db = await openAgentDB(crypto.randomUUID());
   try {

@@ -192,6 +192,7 @@ describe('buildDebugPack', () => {
 
     expect(pack.filename).toBe('monkeyagent-debug-example.com-2026-11-18T08-00-00-000.zip');
     const entries = readZip(pack.data);
+    expect(entries.has('workspace/revisions.json')).toBe(false);
     for (const name of [
       'manifest.json',
       'settings.json',
@@ -206,7 +207,6 @@ describe('buildDebugPack', () => {
       'session/repl-history.json',
       'session/transcript.md',
       'workspace/workspace.json',
-      'workspace/revisions.json',
       'workspace/files/workspace/main.user.js',
       'browser/target.json',
       'browser/events.json',

@@ -18,6 +18,91 @@ async function database(name = crypto.randomUUID()) {
 }
 
 describe('site ownership', () => {
+  it('upgrades v2 by deleting workspace history while preserving current files, bindings, conversations and context', async () => {
+    const name = crypto.randomUUID();
+    const legacy = await openDB(name, 2, {
+      upgrade(db) {
+        db.createObjectStore('workspaces', { keyPath: 'id' });
+        db.createObjectStore('sessions', { keyPath: 'id' }).createIndex(
+          'workspaceId',
+          'workspaceId',
+        );
+        db.createObjectStore('conversations', { keyPath: 'id' });
+        for (const store of ['files', 'revisions'])
+          db.createObjectStore(store, { keyPath: 'key' }).createIndex('workspaceId', 'workspaceId');
+        for (const store of ['runs', 'operations', 'artifacts']) {
+          const object = db.createObjectStore(store, { keyPath: 'id' });
+          object.createIndex('workspaceId', 'workspaceId');
+          if (store !== 'artifacts') object.createIndex('sessionId', 'sessionId');
+        }
+      },
+    });
+    const workspaceId = 'site:example.com',
+      path = '/workspace/main.user.js';
+    const binding = {
+      path,
+      scriptId: '17',
+      scriptRevision: 'installed',
+      fileRevision: 'current',
+      enabled: true,
+      installedCode: 'installed source',
+    };
+    await legacy.put('workspaces', {
+      id: workspaceId,
+      site: 'example.com',
+      updatedAt: 1,
+      bindings: { [path]: binding },
+      lastSessionByTab: { '3': 'session' },
+    });
+    await legacy.put('sessions', {
+      id: 'session',
+      workspaceId,
+      title: 'Keep conversation',
+      targetUrl: 'https://example.com/',
+      updatedAt: 1,
+      baseline: { [path]: 'old' },
+      context: { summary: 'Continue the task' },
+    });
+    await legacy.put('conversations', {
+      id: 'session',
+      messages: [{ id: 'u', role: 'user', parts: [{ type: 'text', text: 'preserved' }] }],
+    });
+    await legacy.put('files', {
+      key: workspaceId + ':' + path,
+      workspaceId,
+      path,
+      content: 'current source',
+      revision: 'current',
+      updatedAt: 1,
+    });
+    await legacy.put('revisions', {
+      key: 'old',
+      workspaceId,
+      path,
+      content: 'old draft',
+      revision: 'old',
+      updatedAt: 0,
+    });
+    legacy.close();
+    const db = await database(name);
+    expect(Array.from(db.objectStoreNames)).not.toContain('revisions');
+    expect((await db.get('files', workspaceId + ':' + path))?.content).toBe('current source');
+    expect((await db.get('sessions', 'session'))?.context?.summary).toBe('Continue the task');
+    expect(await db.get('sessions', 'session')).not.toHaveProperty('baseline');
+    expect((await db.get('workspaces', workspaceId))?.bindings[path]).toMatchObject({
+      scriptId: '17',
+      scriptRevision: 'installed',
+      fileRevision: 'current',
+    });
+    expect((await db.get('workspaces', workspaceId))?.bindings[path]).not.toHaveProperty(
+      'installedCode',
+    );
+    expect((await db.get('workspaces', workspaceId))?.lastSessionByTab).toEqual({ '3': 'session' });
+    expect((await db.get('conversations', 'session'))?.messages[0].parts).toEqual([
+      { type: 'text', text: 'preserved' },
+    ]);
+  });
+
   it('remembers each tab selection independently of the current session target and preserves shared bindings', async () => {
     const db = await database();
     const url = 'https://example.com/';
@@ -28,7 +113,6 @@ describe('site ownership', () => {
       scriptRevision: 'installed',
       fileRevision: 'file',
       enabled: true,
-      installedCode: 'original',
     };
     await workspace.bind(binding.path, binding);
     const a = await SessionService.create(db, workspace.id, url, 1);
@@ -113,7 +197,7 @@ describe('site ownership', () => {
     expect(siteKey('about:blank')).toBe('about:blank');
   });
 
-  it('shares files and bindings across same-site sessions while keeping baselines and other sites separate', async () => {
+  it('shares current files and bindings across same-site sessions while keeping other sites separate', async () => {
     const db = await database();
     const first = await WorkspaceService.create(db, 'https://one.example.com');
     const second = await WorkspaceService.create(db, 'http://two.example.com:8080');
@@ -123,13 +207,11 @@ describe('site ownership', () => {
     const b = await SessionService.create(db, second.id, 'http://two.example.com:8080', 2);
     await SessionService.create(db, other.id, 'https://example.org', 3);
     const file = await first.write('/workspace/main.js', 'original');
-    await a.captureBaseline(await first.allFiles());
     await first.bind(file.path, {
       path: file.path,
       scriptId: '42',
       scriptRevision: 's1',
       fileRevision: file.revision,
-      installedCode: file.content,
       enabled: true,
     });
     expect((await second.metadata()).bindings[file.path].scriptId).toBe('42');
@@ -141,14 +223,11 @@ describe('site ownership', () => {
     expect(writes.find((result) => result.status === 'rejected')).toMatchObject({
       reason: { code: 'conflict' },
     });
-    await b.captureBaseline(await second.allFiles());
-    expect((await a.metadata()).baseline[file.path]).toBe(file.revision);
-    expect((await b.metadata()).baseline[file.path]).not.toBe(file.revision);
+    expect(await a.metadata()).not.toHaveProperty('baseline');
     expect((await SessionService.list(db, first.id)).map((session) => session.id).sort()).toEqual(
       [a.id, b.id].sort(),
     );
     await expect(other.read(file.path)).rejects.toMatchObject({ code: 'not_found' });
-    expect(await other.revision(file.revision)).toBeUndefined();
   });
 
   it('migrates legacy sessions atomically and preserves conflicting files, conversations and history', async () => {
@@ -236,11 +315,9 @@ describe('site ownership', () => {
     expect((await workspace.read(path)).content).toBe('newer');
     const copy = files.find((file) => file.content === 'older')!;
     expect(copy.path).toMatch(/\.migrated-session-.*\.user\.js$/);
-    expect((await new SessionService(db, 'session-a').metadata()).baseline[copy.path]).toBe(
-      'revision-session-a',
-    );
+    expect(await new SessionService(db, 'session-a').metadata()).not.toHaveProperty('baseline');
     expect((await workspace.metadata()).bindings[copy.path].scriptId).toBe('session-a');
-    expect((await workspace.revision('revision-session-a'))?.content).toBe('older');
+    expect(Array.from(db.objectStoreNames)).not.toContain('revisions');
     expect((await db.get('conversations', 'session-a'))?.messages[0].id).toBe('message-session-a');
     expect((await db.getAllFromIndex('runs', 'sessionId', 'session-a'))[0].workspaceId).toBe(
       workspace.id,

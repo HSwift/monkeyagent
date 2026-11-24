@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openAgentDB, type AgentDB } from '../src/workspace/database';
 import { WorkspaceService, normalizePath } from '../src/workspace/service';
 
@@ -13,7 +13,7 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 describe('workspace transactions', () => {
-  it('admits exactly one concurrent revision writer and preserves recoverable revisions', async () => {
+  it('admits exactly one concurrent revision writer without storing file history', async () => {
     const fs = await setup();
     const file = await fs.write('/workspace/test.js', 'original');
     const results = await Promise.allSettled([
@@ -24,7 +24,7 @@ describe('workspace transactions', () => {
     expect(results.find((r) => r.status === 'rejected')).toMatchObject({
       reason: { code: 'conflict' },
     });
-    expect((await fs.revision(file.revision))?.content).toBe('original');
+    expect(Array.from(fs.db.objectStoreNames)).not.toContain('revisions');
     const current = await fs.read(file.path);
     await expect(fs.remove(file.path, file.revision)).rejects.toMatchObject({ code: 'conflict' });
     await fs.remove(file.path, current.revision);
@@ -51,7 +51,6 @@ describe('workspace transactions', () => {
       scriptId: '42',
       scriptRevision: 's1',
       fileRevision: file.revision,
-      installedCode: file.content,
       enabled: true,
     });
     const renamed = await fs.rename(file.path, '/workspace/b.js', file.revision);
@@ -62,6 +61,5 @@ describe('workspace transactions', () => {
     expect((await reopened.read(renamed.path)).content).toBe('hello');
     const other = await WorkspaceService.create(fs.db, 'https://other.example');
     await expect(other.read(renamed.path)).rejects.toMatchObject({ code: 'not_found' });
-    expect(await other.revision(file.revision)).toBeUndefined();
   });
 });

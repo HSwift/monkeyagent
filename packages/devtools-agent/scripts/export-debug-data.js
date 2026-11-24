@@ -22,7 +22,7 @@
     })));
     const selected = sessionId ? sessions.find(item => item.id === sessionId) : sessions[0];
     if (!selected) throw new Error('Session not found. Set sessionId to an ID from the table.');
-    const indexedStores = ['files', 'revisions', 'artifacts'];
+    const indexedStores = ['files', 'artifacts'];
     const tx = db.transaction(['workspaces', 'sessions', 'conversations', 'runs', 'operations', ...indexedStores], 'readonly');
     const [workspace, session, conversation, runs, operations, ...values] = await Promise.all([
       read(tx.objectStore('workspaces').get(selected.workspaceId)),
@@ -97,7 +97,7 @@
   }
   const manifest = chrome.runtime.getManifest();
   const trace = redact({
-    format: 'monkeyagent-debug', schemaVersion: 2, exportedAt: new Date().toISOString(),
+    format: 'monkeyagent-debug', schemaVersion: 3, exportedAt: new Date().toISOString(),
     runtime: { extension: manifest.name, version: manifest.version, userAgent: navigator.userAgent },
     configurationAtExport: {
       provider: settings.provider, baseURL: settings.baseURL, model: settings.model,
