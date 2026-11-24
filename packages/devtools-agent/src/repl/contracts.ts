@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AgentError } from '../protocol/errors';
+import { httpRequestSchema } from '../http/client';
 
 const text = z.string();
 const id = text.min(1);
@@ -9,6 +10,7 @@ const navigation = z
   .optional();
 const contracts: Record<string, z.ZodType> = {
   'runtime.sleep': z.tuple([z.number().min(0).max(60000)]),
+  'http.request': httpRequestSchema,
   'fs.list': z.tuple([text.optional()]),
   'fs.read': z.tuple([
     id,

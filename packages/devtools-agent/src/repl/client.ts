@@ -17,8 +17,23 @@ export class ReplClient {
     }));
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
+      const lifetime = new AbortController();
+      const deadline = setTimeout(
+        () =>
+          lifetime.abort(
+            new AgentError('timeout', 'REPL deadline exceeded. In-memory state was reset.'),
+          ),
+        timeoutMs,
+      );
       const cleanup = () => {
+        clearTimeout(deadline);
         clearTimeout(timer);
+        lifetime.abort(
+          new AgentError(
+            'aborted',
+            'The REPL invocation ended. Pending HTTP requests were cancelled.',
+          ),
+        );
         signal?.removeEventListener('abort', cancel);
         worker.removeEventListener('message', message);
         worker.removeEventListener('error', failed);
@@ -47,14 +62,15 @@ export class ReplClient {
           if (this.active?.id !== id) return;
           try {
             signal?.throwIfAborted();
-            const value = await this.host(data.method, data.args);
-            if (this.active?.id === id)
+            const value = await this.host(data.method, data.args, lifetime.signal);
+            if (this.worker === worker)
               worker.postMessage({ type: 'host-result', id: data.id, value });
           } catch (error) {
-            if (this.active?.id === id)
+            if (this.worker === worker)
               worker.postMessage({ type: 'host-result', id: data.id, error: errorData(error) });
           }
         } else if (data.type === 'result' && data.id === id) {
+          if (lifetime.signal.aborted) return fail(lifetime.signal.reason);
           this.warnings = data.warnings ?? [];
           cleanup();
           if (data.error) {

@@ -69,7 +69,7 @@ it('offers cancellable sleep and actionable errors for the exact unsupported glo
   expect(await vm.run('await sleep(5); return 42;', 1000)).toBe(42);
   await expect(vm.run('return await __hosts__.scripts.list();', 1000)).rejects.toMatchObject({
     code: 'unsupported_global',
-    message: expect.stringContaining('Call fs, browser and scripts directly'),
+    message: expect.stringContaining('Call fs, http, browser and scripts directly'),
   });
   await expect(vm.run('await new Promise(r => setTimeout(r, 5));', 1000)).rejects.toMatchObject({
     code: 'unsupported_global',

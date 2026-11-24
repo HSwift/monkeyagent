@@ -3,6 +3,7 @@ import browser from '../agent/guides/browser-api.md?raw';
 import scripts from '../agent/guides/script-api.md?raw';
 import files from '../agent/guides/file-tools.md?raw';
 import debugging from '../agent/guides/debugging-workflow.md?raw';
+import http from '../agent/guides/http-api.md?raw';
 
 export const API_DOCS: Record<string, string> = {
   '/docs/agent-guide.md': guide,
@@ -10,4 +11,5 @@ export const API_DOCS: Record<string, string> = {
   '/docs/script-api.md': scripts,
   '/docs/file-tools.md': files,
   '/docs/debugging-workflow.md': debugging,
+  '/docs/http-api.md': http,
 };

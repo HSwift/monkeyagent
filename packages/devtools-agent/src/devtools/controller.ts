@@ -9,6 +9,7 @@ import {
 } from 'ai';
 import { BrowserSession } from '../browser/session';
 import { ReplClient } from '../repl/client';
+import { HttpClient, type HttpOptions } from '../http/client';
 import { validateHostCall } from '../repl/contracts';
 import { ScriptService, installedSummary } from '../scripts/service';
 import { openAgentDB, type AgentDB } from '../workspace/database';
@@ -45,6 +46,7 @@ export class Controller {
   private scripts!: ScriptService;
   private fileTools!: FileTools;
   private repl!: ReplClient;
+  private http = new HttpClient();
   private queue = new SerialQueue();
   private messages: UIMessage[] = [];
   private conversationId!: string;
@@ -190,7 +192,7 @@ export class Controller {
     this.scripts = new ScriptService(this.workspace, this.adapter);
     this.fileTools = new FileTools(this.workspace);
     this.repl?.stop();
-    this.repl = new ReplClient((method, args) => this.hostCall(method, args));
+    this.repl = new ReplClient((method, args, signal) => this.hostCall(method, args, signal));
     const storedMessages = (await this.db.get('conversations', this.session.id))?.messages ?? [];
     this.messages = normalizeMessageIds(storedMessages);
     if (this.messages.some((message, index) => message !== storedMessages[index]))
@@ -801,13 +803,23 @@ export class Controller {
       return result;
     }, signal);
   }
-  private async hostCall(method: string, args: unknown[]): Promise<unknown> {
+  private async hostCall(
+    method: string,
+    args: unknown[],
+    runSignal?: AbortSignal,
+  ): Promise<unknown> {
     const signal = this.operationSignal;
     signal?.throwIfAborted();
     validateHostCall(method, args);
     switch (method) {
       case 'runtime.sleep':
         return sleep(args[0] as number, signal);
+      case 'http.request':
+        return this.http.request(
+          args[0] as string,
+          args[1] as HttpOptions | undefined,
+          AbortSignal.any([...(signal ? [signal] : []), ...(runSignal ? [runSignal] : [])]),
+        );
       case 'fs.list':
         return this.workspace.list(...(args as [string?]));
       case 'fs.read':

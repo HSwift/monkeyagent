@@ -246,6 +246,7 @@ export async function buildDebugPack(input: DebugPackInput): Promise<DebugPack> 
       'browser/': 'Inspected tab and the in-memory CDP event buffer (console, logs, network).',
     },
     limitations: [
+      'Extension-origin http.request traffic is outside the inspected tab CDP Network buffer; request/response evidence is included only when retained in REPL code/results, conversation, workspace or artifacts.',
       '/source is an ephemeral read-only view of browser-provided sources. Its index and cache are not exported automatically; explicitly saved source excerpts may appear in conversation, operations or workspace files.',
       'agent/instructions.md and tool definitions are rebuilt at export time; earlier runs may have used a different prompt, directory listing or extension version.',
       'Configuration is captured at export time, not per run. Runs record their own model in session/runs.json.',

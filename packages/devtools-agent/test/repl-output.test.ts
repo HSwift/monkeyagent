@@ -10,6 +10,7 @@ import type { ToolResult } from '../src/protocol/types';
 import { ReplRuntime } from '../src/repl/runtime';
 import { openAgentDB, type AgentDB } from '../src/workspace/database';
 import { fileSummary, WorkspaceService } from '../src/workspace/service';
+import { HttpClient, type HttpOptions } from '../src/http/client';
 
 const databases: AgentDB[] = [];
 const runtimes: ReplRuntime[] = [];
@@ -29,10 +30,12 @@ async function setup(pageValue: unknown = null) {
         headers: { 'content-type': 'application/json' },
       }),
   );
+  const http = new HttpClient(httpFetch);
   const runtime = new ReplRuntime(
     await newQuickJSWASMModuleFromVariant(variant),
     async (method, args) => {
       if (method === 'browser.evaluate') return pageValue;
+      if (method === 'http.request') return http.request(args[0] as string, args[1] as HttpOptions);
       if (method === 'fs.write')
         return fileSummary(await workspace.write(...(args as [string, string, string?])));
       throw new Error(`Unexpected host method: ${method}`);
@@ -103,6 +106,35 @@ it('saves the full final JSON result without changing host values or persistent 
     length: value.text.length,
     numbers: [2, 4, 6],
   });
+  expect(await workspace.db.count('artifacts')).toBe(0);
+});
+
+it('saves an HTTP result explicitly after one request while retaining its complete response in state', async () => {
+  const body = JSON.stringify({
+    items: Array.from({ length: 15000 }, (_, id) => ({ id })),
+    tail: 'HTTP_FULL_TAIL',
+  });
+  const { call, workspace, runtime, httpFetch } = await setup(body);
+  const output_file = '/workspace/scratch/http.json';
+  const result = await call({
+    code: 'state.response=await http.request("https://api.example.com/items"); return {response:state.response,count:JSON.parse(state.response.body).items.length};',
+    output_file,
+  });
+  expect(result).toMatchObject({ success: true, value: { path: output_file } });
+  expect(JSON.stringify(result)).not.toContain('HTTP_FULL_TAIL');
+  const saved = JSON.parse((await workspace.read(output_file)).content);
+  expect(saved).toMatchObject({
+    count: 15000,
+    response: { body, base64Encoded: false, status: 200 },
+  });
+  expect(
+    await runtime.run(
+      'return {body:typeof state.response.body,tail:JSON.parse(state.response.body).tail};',
+      1000,
+    ),
+  ).toEqual({ body: 'string', tail: 'HTTP_FULL_TAIL' });
+  expect(httpFetch).toHaveBeenCalledTimes(1);
+  expect((await workspace.allFiles()).map((file) => file.path)).toEqual([output_file]);
   expect(await workspace.db.count('artifacts')).toBe(0);
 });
 
