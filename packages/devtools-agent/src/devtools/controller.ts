@@ -10,6 +10,11 @@ import {
 import { BrowserSession } from '../browser/session';
 import { ReplClient } from '../repl/client';
 import { HttpClient, type HttpOptions } from '../http/client';
+import {
+  DevtoolsNetworks,
+  type NetworkListOptions,
+  type NetworkBodyOptions,
+} from '../networks/service';
 import { validateHostCall } from '../repl/contracts';
 import { ScriptService, installedSummary } from '../scripts/service';
 import { openAgentDB, type AgentDB } from '../workspace/database';
@@ -47,6 +52,7 @@ export class Controller {
   private fileTools!: FileTools;
   private repl!: ReplClient;
   private http = new HttpClient();
+  private networks = new DevtoolsNetworks();
   private queue = new SerialQueue();
   private messages: UIMessage[] = [];
   private conversationId!: string;
@@ -143,6 +149,7 @@ export class Controller {
   }
   async dispose() {
     this.disposed = true;
+    this.networks.dispose();
     clearTimeout(this.timer);
     this.timer = undefined;
     chrome.tabs.onUpdated?.removeListener(this.onTabUpdated);
@@ -820,6 +827,29 @@ export class Controller {
           args[1] as HttpOptions | undefined,
           AbortSignal.any([...(signal ? [signal] : []), ...(runSignal ? [runSignal] : [])]),
         );
+      case 'networks.status':
+      case 'networks.getHAR':
+      case 'networks.list':
+      case 'networks.get':
+      case 'networks.requestBody':
+      case 'networks.responseBody': {
+        const readSignal = AbortSignal.any([
+          ...(signal ? [signal] : []),
+          ...(runSignal ? [runSignal] : []),
+        ]);
+        if (method === 'networks.status') return this.networks.status(readSignal);
+        if (method === 'networks.getHAR') return this.networks.getHAR(readSignal);
+        if (method === 'networks.list')
+          return this.networks.list(args[0] as NetworkListOptions | undefined, readSignal);
+        if (method === 'networks.get') return this.networks.get(args[0] as string, readSignal);
+        if (method === 'networks.requestBody')
+          return this.networks.requestBody(args[0] as string, readSignal);
+        return this.networks.responseBody(
+          args[0] as string,
+          args[1] as NetworkBodyOptions | undefined,
+          readSignal,
+        );
+      }
       case 'fs.list':
         return this.workspace.list(...(args as [string?]));
       case 'fs.read':

@@ -11,6 +11,7 @@ import type { ToolResult } from '../protocol/types';
 export type HostCall = (method: string, args: unknown[], signal?: AbortSignal) => Promise<unknown>;
 const METHODS = {
   http: ['request'],
+  networks: ['status', 'list', 'get', 'requestBody', 'responseBody', 'getHAR'],
   fs: ['list', 'read', 'write', 'edit', 'remove', 'rename', 'search'],
   browser: [
     'connect',
@@ -182,7 +183,7 @@ export class ReplRuntime {
               ? 'Use await sleep(ms) in the REPL, or page timers inside browser.evaluate(). For navigation use browser.navigate(url).'
               : name === 'fetch'
                 ? 'Use http.request(url, options) for extension-origin HTTP, or page fetch inside browser.evaluate(expression). See /docs/http-api.md.'
-                : 'The REPL has fs/http/browser/scripts/state/sleep, without DOM, Node or extension globals. Run page JavaScript with browser.evaluate(expression).';
+                : 'The REPL has fs/http/networks/browser/scripts/state/sleep, without DOM, Node or extension globals. Run page JavaScript with browser.evaluate(expression).';
         throw new AgentError('unsupported_global', `${message} ${hint} See /docs/agent-guide.md.`);
       }
       throw error;

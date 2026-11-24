@@ -11,6 +11,31 @@ const navigation = z
 const contracts: Record<string, z.ZodType> = {
   'runtime.sleep': z.tuple([z.number().min(0).max(60000)]),
   'http.request': httpRequestSchema,
+  'networks.status': z.tuple([]),
+  'networks.getHAR': z.tuple([]),
+  'networks.list': z.tuple([
+    z
+      .strictObject({
+        urlFilter: text.max(8192).optional(),
+        methods: z.array(id.max(64)).max(32).optional(),
+        types: z.array(id.max(64)).max(32).optional(),
+        statusCodes: z.array(z.number().int().min(0).max(999)).max(1000).optional(),
+        offset: z.number().int().min(0).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      })
+      .optional(),
+  ]),
+  'networks.get': z.tuple([id]),
+  'networks.requestBody': z.tuple([id]),
+  'networks.responseBody': z.tuple([
+    id,
+    z
+      .strictObject({
+        offset: z.number().int().min(0).optional(),
+        limit: z.number().int().min(1).max(64000).optional(),
+      })
+      .optional(),
+  ]),
   'fs.list': z.tuple([text.optional()]),
   'fs.read': z.tuple([
     id,
