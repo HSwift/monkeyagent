@@ -62,6 +62,23 @@ export class SessionService {
     await tx.done;
   }
 
+  /** Remember each tab's explicit selection independently of the session's current target. */
+  async activate(targetUrl: string, tabId: number) {
+    const tx = this.db.transaction(['sessions', 'workspaces'], 'readwrite');
+    const session = await tx.objectStore('sessions').get(this.id);
+    if (!session) throw new AgentError('not_found', 'Session not found.');
+    if (siteWorkspaceId(targetUrl) !== session.workspaceId)
+      throw new AgentError('site_scope', 'Session belongs to a different site.');
+    const workspace = await tx.objectStore('workspaces').get(session.workspaceId);
+    if (!workspace) throw new AgentError('not_found', 'Workspace not found.');
+    await tx
+      .objectStore('sessions')
+      .put({ ...session, targetUrl, targetTabId: tabId, updatedAt: Date.now() });
+    await tx
+      .objectStore('workspaces')
+      .put({ ...workspace, lastSessionByTab: { ...workspace.lastSessionByTab, [tabId]: this.id } });
+    await tx.done;
+  }
   async saveContext(context: ContextCheckpoint, conversationId: string) {
     const tx = this.db.transaction('sessions', 'readwrite');
     const session = await tx.store.get(this.id);

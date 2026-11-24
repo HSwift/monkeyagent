@@ -1,12 +1,12 @@
 import { AgentError } from '../protocol/errors';
 
 /** Locks are automatically released if the DevTools renderer exits. */
-export function acquireSessionLease(id: string): Promise<() => void> {
+export function acquireSessionLease(id: string, wait = false): Promise<() => void> {
   return new Promise((resolve, reject) => {
     void navigator.locks
       .request(
         `monkeyagent:session:${id}`,
-        { mode: 'exclusive', ifAvailable: true },
+        { mode: 'exclusive', ifAvailable: !wait },
         async (lock) => {
           if (!lock) {
             reject(

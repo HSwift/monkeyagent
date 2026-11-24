@@ -50,6 +50,7 @@ export interface WorkspaceRecord {
   site: string;
   updatedAt: number;
   bindings: Record<string, ScriptBinding>;
+  lastSessionByTab?: Record<string, string>;
 }
 export interface SessionRecord {
   id: string;

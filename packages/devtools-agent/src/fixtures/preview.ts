@@ -24,7 +24,7 @@ export async function startPreview(client: ControllerClient) {
     configurable: true,
     value: {
       runtime,
-      tabs: { get: async () => ({ url: 'https://preview.invalid/' }) },
+      tabs: { get: async () => ({ url: 'https://preview.invalid/' }), query: async () => [] },
       debugger: { onEvent: event(), onDetach: event(), attach: unavailable },
     },
   });

@@ -18,6 +18,35 @@ async function database(name = crypto.randomUUID()) {
 }
 
 describe('site ownership', () => {
+  it('remembers each tab selection independently of the current session target and preserves shared bindings', async () => {
+    const db = await database();
+    const url = 'https://example.com/';
+    const workspace = await WorkspaceService.create(db, url);
+    const binding = {
+      path: '/workspace/shared.js',
+      scriptId: 'script',
+      scriptRevision: 'installed',
+      fileRevision: 'file',
+      enabled: true,
+      installedCode: 'original',
+    };
+    await workspace.bind(binding.path, binding);
+    const a = await SessionService.create(db, workspace.id, url, 1);
+    const b = await SessionService.create(db, workspace.id, url, 2);
+    await a.activate(url, 1);
+    await b.activate(url, 2);
+    await a.activate(url, 2);
+    expect((await workspace.metadata()).lastSessionByTab).toEqual({ '1': a.id, '2': a.id });
+    expect((await a.metadata()).targetTabId).toBe(2);
+    await b.activate(url, 1);
+    expect((await workspace.metadata()).lastSessionByTab).toEqual({ '1': b.id, '2': a.id });
+    await expect(a.activate('https://example.org/', 1)).rejects.toMatchObject({
+      code: 'site_scope',
+    });
+    expect((await workspace.metadata()).lastSessionByTab?.['1']).toBe(b.id);
+    expect((await workspace.metadata()).bindings).toEqual({ [binding.path]: binding });
+  });
+
   it('shows English default titles for legacy sessions while preserving user content', async () => {
     const db = await database();
     const workspace = await WorkspaceService.create(db, 'https://example.com');

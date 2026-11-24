@@ -98,14 +98,31 @@ export class Controller {
     return this;
   }
   private async restoreSession() {
-    const latest = (await SessionService.list(this.db, this.workspace.id)).find(
-      (session) => session.targetTabId === this.tabId,
+    const [history, workspace, tabs] = await Promise.all([
+      SessionService.list(this.db, this.workspace.id),
+      this.workspace.metadata(),
+      chrome.tabs.query({}),
+    ]);
+    const preferred = workspace.lastSessionByTab?.[this.tabId];
+    const liveTabs = new Set(tabs.map((tab) => tab.id));
+    const available = history.filter(
+      (session) => session.targetTabId === undefined || !liveTabs.has(session.targetTabId),
     );
+    const latest =
+      history.find((session) => session.id === preferred) ??
+      history.find((session) => session.targetTabId === this.tabId) ??
+      available.find((session) => session.targetUrl === this.targetUrl) ??
+      available[0];
     this.session = latest
       ? new SessionService(this.db, latest.id)
       : await SessionService.create(this.db, this.workspace.id, this.targetUrl, this.tabId);
     try {
-      this.releaseSession = await acquireSessionLease(this.session.id);
+      // Chrome may still be releasing the previous renderer's lock during a quick reopen.
+      // The same inspected tab has one native DevTools window; wait for its handover.
+      this.releaseSession = await acquireSessionLease(
+        this.session.id,
+        latest?.targetTabId === this.tabId,
+      );
     } catch (error) {
       if (!(error instanceof AgentError) || error.code !== 'session_busy') throw error;
       this.session = await SessionService.create(
@@ -116,7 +133,7 @@ export class Controller {
       );
       this.releaseSession = await acquireSessionLease(this.session.id);
     }
-    await this.session.patch({ targetUrl: this.targetUrl, targetTabId: this.tabId });
+    await this.session.activate(this.targetUrl, this.tabId);
   }
   private syncTarget(url: string): Promise<void> {
     const change = this.siteChanges.then(async () => {
@@ -453,7 +470,7 @@ export class Controller {
         throw new AgentError('site_scope', 'Session belongs to a different site.');
       const release = await acquireSessionLease(next.id);
       try {
-        await next.patch({ targetUrl: this.targetUrl, targetTabId: this.tabId });
+        await next.activate(this.targetUrl, this.tabId);
       } catch (error) {
         release();
         throw error;
