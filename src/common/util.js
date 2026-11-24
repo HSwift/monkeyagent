@@ -2,14 +2,14 @@
 
 import { BLOB_LIFE, FMT_SIZE_KB_MB, FMT_SIZE_TIGHT, U8_fromBase64 } from '@/common/consts';
 
-export const i18n = memoize((name, args) => chrome.i18n.getMessage(name, args) || name);
+export const i18n = /*@__PURE__*/memoize((name, args) => chrome.i18n.getMessage(name, args) || name);
 const HAS_BASE64_RE = /(^|;)\s*base64\s*(;|$)/;
 const NON_ASCII_RE = /[\x80-\xFF]/;
 /** @type {Set<Promise>} */
 const alivePromises = (__.DEV || __.DEBUG) && __.SW && (global.alivePromises = new Set());
 
 export function memoize(func) {
-  const cacheMap = /*@__PURE__*/Object.create(null);
+  const cacheMap = Object.create(null);
   function memoized(...args) {
     const key = args.length === 1 ? `${args[0]}` : JSON.stringify(args);
     const res = cacheMap[key];
@@ -63,6 +63,18 @@ export function throttle(func, time) {
 }
 
 export function noop() {}
+
+export const promiseResolvers = __.MV3
+? /*@__PURE__*/Promise.withResolvers.bind(Promise)
+: /** @return {{ promise: Promise, resolve: function, reject: function }} */ () => {
+  // MV2 polyfill. TODO: remove when strict_min_version>=121 and minimum_chrome_version>=119
+  const res = {};
+  res.promise = new Promise((resolve, reject) => {
+    res.resolve = resolve;
+    res.reject = reject;
+  });
+  return res;
+};
 
 export function getUniqId(prefix = 'VM', idSafe) {
   let res = crypto.getRandomValues(new Uint8Array(12));
@@ -333,7 +345,7 @@ let keepAliveCount = 0;
  */
 export function keepAlive(promise) {
   let res = promise;
-  if (!res) ({ promise, resolve: res } = Promise.withResolvers());
+  if (!res) ({ promise, resolve: res } = promiseResolvers());
   keepAliveTimer ||= setInterval(chrome.runtime.getPlatformInfo, 25e3);
   keepAliveCount++;
   if (__.DEV || __.DEBUG) {
