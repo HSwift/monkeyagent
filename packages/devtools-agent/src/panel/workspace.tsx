@@ -18,6 +18,7 @@ import { CodeEditor, DiffEditor } from '../components/code-editor';
 import type { ControllerClient } from '../protocol/client';
 import type { FileRecord, ScriptSummary, Snapshot, ToolResult } from '../protocol/types';
 import { DebugPane } from './debug';
+import { ReadonlyFileViewer } from './artifact';
 
 type Attachment = { path: string; content: string; selection: string };
 export type WorkspaceView = 'files' | 'changes' | 'debug';
@@ -258,6 +259,8 @@ export function WorkspacePane({
                   attach={attach}
                 />
               </>
+            ) : selectedPath.startsWith('/artifacts/') ? (
+              <ReadonlyFileViewer key={selectedPath} path={selectedPath} client={client}/>
             ) : (
               <div className="empty-workspace">
                 <FileCode2 size={30} />

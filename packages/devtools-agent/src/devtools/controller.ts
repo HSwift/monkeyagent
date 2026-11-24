@@ -23,7 +23,8 @@ import { acquireSessionLease } from '../workspace/lease';
 import { DEFAULT_SESSION_TITLE, SessionService } from '../workspace/session';
 import { siteWorkspaceId } from '../workspace/site';
 import { createModel, loadSettings, saveSettings, checkConnection } from '../model/settings';
-import { ACTIVE_TOOLS, createTools, findArtifacts } from '../agent/tools';
+import { ACTIVE_TOOLS, createTools } from '../agent/tools';
+import { prepareToolOutput } from '../agent/output';
 import { FileTools } from '../agent/file-tools';
 import { INSTRUCTIONS } from '../agent/prompt';
 import { API_DOCS } from '../workspace/docs';
@@ -772,30 +773,13 @@ export class Controller {
       try {
         const value = await fn();
         signal?.throwIfAborted();
-        const artifacts = findArtifacts(value);
-        const text = JSON.stringify(value ?? null);
-        result =
-          text.length > 128 * 1024
-            ? {
-                success: true,
-                value: {
-                  preview: text.slice(0, 32000),
-                  artifact: await this.workspace.artifact(
-                    new Blob([text], { type: 'application/json' }),
-                    'result.json',
-                  ),
-                },
-                durationMs: performance.now() - start,
-                artifacts,
-                truncated: true,
-              }
-            : {
-                success: true,
-                value,
-                durationMs: performance.now() - start,
-                ...(artifacts.length ? { artifacts } : {}),
-              };
-        if (name === 'repl' && this.repl.warnings.length) result.warnings = this.repl.warnings;
+        result = {
+          success: true,
+          ...(await prepareToolOutput(this.workspace, name, value)),
+          durationMs: performance.now() - start,
+        };
+        if (name === 'repl' && this.repl.warnings.length)
+          result.warnings = [...(result.warnings ?? []), ...this.repl.warnings];
         operation.status = 'completed';
       } catch (error) {
         result = { success: false, error: errorData(error), durationMs: performance.now() - start };

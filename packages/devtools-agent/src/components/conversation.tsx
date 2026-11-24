@@ -96,7 +96,11 @@ function ToolCard({
   const result = part.output as ToolResult | undefined;
   const failed = part.state === 'output-error' || result?.success === false;
   const name = part.type === 'dynamic-tool' ? part.toolName : part.type.slice(5);
-  const path = (part.input?.file_path ?? part.input?.path) as string | undefined;
+  const path = (part.input?.file_path ??
+    part.input?.path ??
+    (name === 'repl' && part.input?.output_file && result?.success
+      ? (result.value as { path?: string })?.path
+      : undefined)) as string | undefined;
   return (
     <Collapsible.Root className={`tool-card ${failed ? 'tool-failed' : ''}`}>
       <Collapsible.Trigger className="tool-trigger">
@@ -125,6 +129,14 @@ function ToolCard({
             {path}
           </button>
         )}
+        {result?.artifacts
+          ?.filter((ref) => /^(text\/|application\/json)/.test(ref.mimeType))
+          .map((ref) => (
+            <button key={ref.id} className="file-link" onClick={() => openFile(ref.path)}>
+              <FileCode2 size={12} />
+              {ref.path}
+            </button>
+          ))}
         <p className="eyebrow">Input</p>
         <pre>{part.input?.code ?? JSON.stringify(part.input ?? {}, null, 2)}</pre>
         <p className="eyebrow">Result</p>

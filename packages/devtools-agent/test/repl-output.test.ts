@@ -5,6 +5,7 @@ import { newQuickJSWASMModuleFromVariant } from 'quickjs-emscripten-core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createTools } from '../src/agent/tools';
+import { prepareToolOutput } from '../src/agent/output';
 import { errorData } from '../src/protocol/errors';
 import type { ToolResult } from '../src/protocol/types';
 import { ReplRuntime } from '../src/repl/runtime';
@@ -49,7 +50,7 @@ async function setup(pageValue: unknown = null) {
     repl: run,
     execute: async (name, _input, fn) => {
       try {
-        const output = { value: await fn(), warnings: [] };
+        const output = await prepareToolOutput(workspace, name, await fn());
         return {
           success: true,
           ...output,

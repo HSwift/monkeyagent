@@ -1,3 +1,4 @@
+// @vitest-environment node
 import 'fake-indexeddb/auto';
 import { inflateRawSync, crc32 as zlibCrc32 } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,6 +8,7 @@ import { WorkspaceService } from '../src/workspace/service';
 import { SessionService } from '../src/workspace/session';
 import { createZip, crc32 } from '../src/debug/zip';
 import { createRedactor, REDACTED } from '../src/debug/redact';
+import { prepareToolOutput } from '../src/agent/output';
 import { buildDebugPack } from '../src/debug/export';
 import type { ModelSettings, OperationRecord } from '../src/protocol/types';
 
@@ -125,6 +127,12 @@ describe('buildDebugPack', () => {
     await db.put('operations', operation('manual-op', session.id));
     await db.put('operations', operation('agent-op', session.id, 'run-1'));
     await db.put('operations', operation('other-op', other.id));
+    workspace.sessionId = session.id;
+    const largeValue = { body: 'x'.repeat(20000), tail: 'EXPORTED_COMPLETE_TAIL' };
+    const savedOutput = await prepareToolOutput(workspace, 'repl', largeValue);
+    const agentOperation = operation('agent-op', session.id, 'run-1');
+    agentOperation.output = { success: true, ...savedOutput, durationMs: 5 };
+    await db.put('operations', agentOperation);
     await db.put('runs', {
       id: 'run-1',
       workspaceId: workspace.id,
@@ -133,8 +141,22 @@ describe('buildDebugPack', () => {
       startedAt: Date.now() - 1000,
       endedAt: Date.now(),
       queued: [],
-      model: { provider: 'openai-compatible', baseURL: 'https://api', model: 'm1', supportsImages: false },
-      steps: [{ index: 1, endedAt: Date.now(), finishReason: 'stop', inputTokens: 10, outputTokens: 2, toolCalls: [] }],
+      model: {
+        provider: 'openai-compatible',
+        baseURL: 'https://api',
+        model: 'm1',
+        supportsImages: false,
+      },
+      steps: [
+        {
+          index: 1,
+          endedAt: Date.now(),
+          finishReason: 'stop',
+          inputTokens: 10,
+          outputTokens: 2,
+          toolCalls: [],
+        },
+      ],
     });
     const settings: ModelSettings = {
       provider: 'openai-compatible',
@@ -184,8 +206,8 @@ describe('buildDebugPack', () => {
       'session/repl-history.json',
       'session/transcript.md',
       'workspace/workspace.json',
-      'workspace/files/workspace/main.user.js',
       'workspace/revisions.json',
+      'workspace/files/workspace/main.user.js',
       'browser/target.json',
       'browser/events.json',
     ])
@@ -198,7 +220,9 @@ describe('buildDebugPack', () => {
       counts: { replRuns: 2, operations: 2, files: 1, browserEvents: 1 },
     });
     const history = JSON.parse(text(entries.get('session/repl-history.json')));
-    expect(history.map((entry: { id: string; source: string }) => [entry.id, entry.source])).toEqual(
+    expect(
+      history.map((entry: { id: string; source: string }) => [entry.id, entry.source]),
+    ).toEqual(
       expect.arrayContaining([
         ['manual-op', 'manual'],
         ['agent-op', 'agent'],
@@ -215,6 +239,12 @@ describe('buildDebugPack', () => {
     });
 
     const everything = [...entries.values()].map(text).join('\n');
+    const exportedArtifacts = JSON.parse(text(entries.get('workspace/artifacts.json')));
+    const savedArtifact = exportedArtifacts.find(
+      (artifact: any) => artifact.id === savedOutput.artifacts?.at(-1)?.id,
+    );
+    expect(savedArtifact.path).toMatch(/^\/artifacts\//);
+    expect(JSON.parse(text(entries.get(`workspace/${savedArtifact.file}`)))).toEqual(largeValue);
     expect(everything).not.toContain(apiKey);
     expect(everything).not.toContain('other-op');
   });

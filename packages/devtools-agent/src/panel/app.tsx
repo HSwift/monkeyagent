@@ -135,7 +135,7 @@ export function App({ client }: { client: ControllerClient }) {
   }
   function openFile(path: string) {
     setSelectedPath(path);
-    openDrawer('changes');
+    openDrawer('files');
   }
   function openDrawer(view: WorkspaceView) {
     setDrawerView(view);
