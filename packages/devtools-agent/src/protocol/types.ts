@@ -62,6 +62,7 @@ export interface WorkspaceRecord {
   updatedAt: number;
   bindings: Record<string, ScriptBinding>;
   lastSessionByTab?: Record<string, string>;
+  artifactsRevision?: string;
 }
 export interface SessionRecord {
   id: string;

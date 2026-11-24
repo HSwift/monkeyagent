@@ -926,6 +926,25 @@ strong {
   font-size: 10px;
   color: var(--muted);
 }
+.tree-folder span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tree-refresh {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 8px 4px 20px;
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.readonly-label {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .tree-file {
   padding-left: 23px;
   color: var(--muted);

@@ -70,6 +70,19 @@ export class WorkspaceService {
     this.changed();
   }
   async list(prefix = '/') {
+    const docs = () =>
+      Object.entries(API_DOCS).map(([path, content]) => ({
+        path,
+        revision: 'docs-v12',
+        updatedAt: 0,
+        size: content.length,
+      }));
+    if (prefix === '/docs' || prefix.startsWith('/docs/')) {
+      prefix = normalizePath(prefix);
+      return docs()
+        .filter((file) => file.path.startsWith(prefix))
+        .sort((a, b) => a.path.localeCompare(b.path));
+    }
     if (prefix === '/artifacts' || prefix.startsWith('/artifacts/')) {
       prefix = normalizePath(prefix);
       const artifacts = await this.db.getAllFromIndex('artifacts', 'workspaceId', this.id);
@@ -106,12 +119,7 @@ export class WorkspaceService {
         updatedAt,
         size: content.length,
       })),
-      ...Object.entries(API_DOCS).map(([path, content]) => ({
-        path,
-        revision: 'docs-v1',
-        updatedAt: 0,
-        size: content.length,
-      })),
+      ...docs(),
     ]
       .filter((f) => f.path.startsWith(prefix))
       .sort((a, b) => a.path.localeCompare(b.path));
@@ -297,13 +305,17 @@ export class WorkspaceService {
   async artifact(blob: Blob, name = 'artifact'): Promise<ArtifactRef> {
     const id = crypto.randomUUID();
     const ref = { id, path: `/artifacts/${name}-${id}`, mimeType: blob.type, size: blob.size };
-    await this.db.put('artifacts', {
+    const tx = this.db.transaction(['artifacts', 'workspaces'], 'readwrite');
+    await tx.objectStore('artifacts').put({
       ...ref,
       workspaceId: this.id,
       sessionId: this.sessionId,
       blob,
       createdAt: Date.now(),
     });
+    const meta = await tx.objectStore('workspaces').get(this.id);
+    if (meta) await tx.objectStore('workspaces').put({ ...meta, artifactsRevision: id });
+    await tx.done;
     this.changed();
     return ref;
   }

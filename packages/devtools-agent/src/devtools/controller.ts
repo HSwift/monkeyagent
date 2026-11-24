@@ -412,6 +412,15 @@ export class Controller {
         return this.workspace.remove(...(args as [string, string]));
       case 'files.read':
         return this.workspace.read(...(args as [string, { offset?: number; limit?: number }?]));
+      case 'files.list': {
+        const root = args[0];
+        if (root !== '/workspace' && root !== '/docs' && root !== '/artifacts')
+          throw new AgentError(
+            'invalid_path',
+            'Files panel roots are /workspace, /docs and /artifacts.',
+          );
+        return this.workspace.list(root);
+      }
       case 'scripts.history':
         return this.scripts.history(args[0] as string);
       case 'scripts.version':

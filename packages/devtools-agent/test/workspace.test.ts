@@ -13,6 +13,34 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 describe('workspace transactions', () => {
+  it('lists bundled docs independently of IndexedDB and exposes no content in directory metadata', async () => {
+    const fs = await setup();
+    fs.db.close();
+    const docs = await fs.list('/docs');
+    expect(docs.some((file) => file.path === '/docs/agent-guide.md')).toBe(true);
+    expect(docs.every((file) => !('content' in file))).toBe(true);
+  });
+  it('lists artifacts as metadata, signals changes and leaves source discovery idle', async () => {
+    const fs = await setup();
+    const list = vi.fn(async () => {
+      throw new Error('Sources must stay lazy');
+    });
+    fs.sources = { list, read: vi.fn() };
+    const first = await fs.artifact(
+      new Blob(['complete result'], { type: 'application/json' }),
+      'result.json',
+    );
+    const revision = (await fs.metadata()).artifactsRevision;
+    expect(revision).toBe(first.id);
+    expect(await fs.list('/artifacts')).toEqual([
+      { path: first.path, revision: first.id, updatedAt: expect.any(Number), size: first.size },
+    ]);
+    expect(await fs.allFiles()).toEqual([]);
+    await fs.list('/docs');
+    expect(list).not.toHaveBeenCalled();
+    await fs.artifact(new Blob(['later result'], { type: 'text/plain' }));
+    expect((await fs.metadata()).artifactsRevision).not.toBe(revision);
+  });
   it('admits exactly one concurrent revision writer without storing file history', async () => {
     const fs = await setup();
     const file = await fs.write('/workspace/test.js', 'original');

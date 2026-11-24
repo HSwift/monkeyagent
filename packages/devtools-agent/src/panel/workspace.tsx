@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   FileCode2,
-  ChevronDown,
-  ChevronRight,
-  FolderOpen,
   Plus,
   Pencil,
   Trash2,
@@ -13,7 +10,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react';
-import { Button, IconButton, Modal, Scroller } from '../components/ui';
+import { Button, IconButton, Modal } from '../components/ui';
 import { CodeEditor, DiffEditor } from '../components/code-editor';
 import type { ControllerClient } from '../protocol/client';
 import type {
@@ -25,6 +22,7 @@ import type {
 } from '../protocol/types';
 import { DebugPane } from './debug';
 import { ReadonlyFileViewer } from './artifact';
+import { FileTree } from './file-tree';
 type Attachment = { path: string; content: string; selection: string };
 type EditorDraftStatus = { path: string; revision: string; pending: boolean };
 export type WorkspaceView = 'files' | 'changes' | 'debug';
@@ -57,7 +55,6 @@ export function WorkspacePane({
   attach: (value: Attachment) => void;
   report: (error: unknown) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(new Set<string>());
   const [dialog, setDialog] = useState<'new' | 'rename' | 'delete' | 'import' | null>(null);
   const [path, setPath] = useState('/workspace/main.user.js');
   const [upload, setUpload] = useState<File | null>(null);
@@ -148,9 +145,6 @@ export function WorkspacePane({
         })
         .catch(report);
   }
-  const groups = [
-    ...new Set(snapshot.files.map((file) => file.path.slice(0, file.path.lastIndexOf('/')))),
-  ].sort();
   return (
     <section className="workspace-pane">
       <div className="drawer-heading">
@@ -179,71 +173,13 @@ export function WorkspacePane({
       </div>
       <div className="workspace-content" hidden={view !== 'files'}>
         <div className="file-layout">
-          <aside
-            className="file-tree"
-            aria-label="Workspace files"
-            onKeyDown={(event) => {
-              if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-              const files = [
-                ...event.currentTarget.querySelectorAll<HTMLButtonElement>('button.tree-file'),
-              ];
-              if (!files.length) return;
-              const index = files.indexOf(event.target as HTMLButtonElement);
-              const next =
-                event.key === 'Home'
-                  ? 0
-                  : event.key === 'End'
-                    ? files.length - 1
-                    : Math.max(
-                        0,
-                        Math.min(files.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)),
-                      );
-              event.preventDefault();
-              files[next].click();
-              files[next].focus();
-            }}
-          >
-            <div className="tree-header">
-              <span>Workspace</span>
-            </div>
-            <Scroller>
-              {groups.map((group) => (
-                <div key={group}>
-                  <button
-                    className="tree-folder"
-                    onClick={() =>
-                      setCollapsed((current) => {
-                        const next = new Set(current);
-                        next.has(group) ? next.delete(group) : next.add(group);
-                        return next;
-                      })
-                    }
-                  >
-                    {collapsed.has(group) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                    <FolderOpen size={13} />
-                    {group.split('/').pop()}
-                  </button>
-                  {!collapsed.has(group) &&
-                    snapshot.files
-                      .filter((file) => file.path.slice(0, file.path.lastIndexOf('/')) === group)
-                      .map((file) => (
-                        <button
-                          key={file.path}
-                          className={`tree-file ${selectedPath === file.path ? 'selected' : ''}`}
-                          onClick={() => selectFile(file.path)}
-                          title={file.path}
-                        >
-                          <FileCode2 size={13} />
-                          <span>{file.path.split('/').pop()}</span>
-                          {snapshot.workspace.bindings[file.path]?.fileRevision !==
-                            file.revision && <span className="file-dot" />}
-                        </button>
-                      ))}
-                </div>
-              ))}
-              {!snapshot.files.length && <p className="tree-empty">No files yet</p>}
-            </Scroller>
-          </aside>
+          <FileTree
+            client={client}
+            snapshot={snapshot}
+            active={open && view === 'files'}
+            selectedPath={selectedPath}
+            selectFile={selectFile}
+          />
           <div className="file-main">
             {file ? (
               <>
@@ -267,7 +203,7 @@ export function WorkspacePane({
                   attach={attach}
                 />
               </>
-            ) : selectedPath.startsWith('/artifacts/') ? (
+            ) : selectedPath.startsWith('/artifacts/') || selectedPath.startsWith('/docs/') ? (
               <ReadonlyFileViewer
                 key={`${snapshot.workspace.id}:${selectedPath}`}
                 path={selectedPath}

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DropdownMenu } from 'radix-ui';
 import {
@@ -53,7 +53,18 @@ export function App({ client }: { client: ControllerClient }) {
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [model, setModel] = useState('Configure model');
-  const [selectedPath, setSelectedPath] = useState('/workspace/main.user.js');
+  const [selectedFile, setSelectedFile] = useState<{
+    workspaceId: string | undefined;
+    path: string;
+  }>();
+  const selectedPath =
+    selectedFile?.workspaceId === snapshot?.workspace.id
+      ? (selectedFile?.path ?? '/workspace/main.user.js')
+      : (snapshot?.files[0]?.path ?? '/workspace/main.user.js');
+  const setSelectedPath = useCallback(
+    (path: string) => setSelectedFile({ workspaceId: snapshot?.workspace.id, path }),
+    [snapshot?.workspace.id],
+  );
   const [drawerView, setDrawerView] = useState<WorkspaceView>('files');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerTriggers = useRef<Partial<Record<WorkspaceView, HTMLButtonElement | null>>>({});
@@ -107,6 +118,7 @@ export function App({ client }: { client: ControllerClient }) {
   useEffect(() => {
     if (
       snapshot &&
+      selectedPath.startsWith('/workspace/') &&
       !snapshot.files.some((file) => file.path === selectedPath) &&
       snapshot.files.length
     )
